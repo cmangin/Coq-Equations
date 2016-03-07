@@ -96,7 +96,7 @@ Module NoCycle_ord.
       (* No subterm in a non-recursive constructor. *)
       + intros x'. apply (X _ _ (snd (H _))).
   Qed.
-  
+
   Definition no_cycle x y : x = y -> noSubterm x y.
   Proof.
     intros ->.
@@ -218,12 +218,12 @@ Module NoCycle_mut.
   Definition noLargeSubterm_R x y :=
     ((x <> y) * noSubterm_R x y)%type.
 
-  Lemma step_N b : forall r, noSubterm_R r b -> noSubterm_TR (N r) b
-  with  step_rcons1 b : forall t r, noSubterm_T t b -> noSubterm_RT (rcons t r) b
-  with  step_rcons2 b : forall t r, noSubterm_R r b -> noLargeSubterm_R (rcons t r) b
-  with  step_aux1 b : forall r, noSubterm_RT r b -> noLargeSubterm_T (N r) b
-  with  step_aux2 b : forall t r, noSubterm_TR t b -> noLargeSubterm_R (rcons t r) b
-  with  step_aux3 b : forall t r, noSubterm_RT r b -> noSubterm_RT (rcons t r) b.
+  Lemma step_N b : forall r, noSubterm_R r b -> noSubterm_TR (N r) b (* N (R), R case *)
+  with  step_rcons1 b : forall t r, noSubterm_T t b -> noSubterm_RT (rcons t r) b (* rcons1 (T), T case *)
+  with  step_rcons2 b : forall t r, noSubterm_R r b -> noLargeSubterm_R (rcons t r) b (* rcons2 (R), R case *)
+  with  step_aux1 b : forall r, noSubterm_RT r b -> noLargeSubterm_T (N r) b (* N (R), T case *)
+  with  step_aux2 b : forall t r, noSubterm_TR t b -> noLargeSubterm_R (rcons t r) b (* rcons1 (T), R case *)
+  with  step_aux3 b : forall t r, noSubterm_RT r b -> noSubterm_RT (rcons t r) b. (* rcons2 (R), T case *)
   Proof.
     * destruct b; intros r H.
       - exact I.
@@ -292,6 +292,7 @@ Module NoCycle_mut.
   Qed.
 End NoCycle_mut.
 
+Require Import Equations.DepElimDec.
 Require Import Eqdep_dec.
 
 Theorem nat_dec (n m : nat) : {n = m} + {n <> m}.
@@ -367,4 +368,53 @@ Module NoCycle_dep.
       apply no_cycle.
     Qed.
   End noCycle_vect.
+
+  (* Now with sigmas. *)
+
+  Definition Below_vect' (A : Type) (P : {n : nat & vect A n} -> Type)
+    (x : {n : nat & vect A n}) : Type :=
+    let P' := fun n v => P (n; v) in
+    let (n, v) := x in
+    Below_vect A P' n v.
+
+  Section noCycle_vect'.
+    Variable (A : Type).
+
+    Definition noSubterm' x y :=
+      Below_vect' A (fun y => x <> y) y.
+
+    Definition noLargeSubterm' x y :=
+      ((x <> y) * noSubterm' x y)%type.
+
+    Definition cons' a (x : {n : nat & vect A n}) : {n : nat & vect A n} :=
+      let (n, v) := x in (S n; cons a v).
+
+    Lemma step_cons' x b a : noSubterm' x b -> noLargeSubterm' (cons' a x) b.
+    Proof.
+      destruct b as [m w].
+      induction w as [|m w']; intros H; destruct x as [n v].
+      - split.
+        + intros H'; depelim H'.
+        + exact I.
+      - split.
+        + pose proof (fst H).
+          unfold not.
+          apply simplification_sigma1; intros H'.
+          inversion H'; subst; clear H'.
+          apply simplification_sigma2_dec; intros H'.
+          inversion H'; subst; clear H'.
+          depelim H3. apply H0. reflexivity.
+        + apply (IHw (snd H)).
+    Qed.
+
+    Definition no_cycle' x y : x = y -> noSubterm' x y.
+    Proof.
+      intros ->.
+      destruct y as [n v].
+      induction v.
+
+      - exact I.
+      - apply (step_cons' (n; v)). apply IHv.
+    Qed.
+  End noCycle_vect'.
 End NoCycle_dep.

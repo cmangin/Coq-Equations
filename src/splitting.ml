@@ -124,7 +124,26 @@ let term_of_tree status isevar env (i, delta, ty) ann tree =
 	let branches = 
 	  Array.map (fun split -> 
 	    match split with
-	    | Some s -> let evm', c, t = aux !evd s in evd := evm'; c,t
+	    | Some (s, _, f) -> let evm', c, t = aux !evd s in evd := evm';
+                begin
+                  Flags.with_options
+                    [Constrextern.print_no_symbol; Constrextern.print_implicits]
+                  (fun () -> 
+                    let c' = f env evd ty c in
+                    try
+                      let _, ty' = Typing.type_of env !evd c' in ()
+                      (*msg_warning (str "of type");
+                      msg_info (Printer.pr_constr ty');*)
+                    with
+                    | TypeError(ctx, te) ->
+                      msg_warning (str "Produced term");
+                      msg_info (Printer.pr_constr_env env !evd c');
+                      msg_error (str "wrong type");
+                      msg_info (Himsg.explain_type_error ctx Evd.empty te)
+                    | _ -> msg_error (str "something went wrong while typing")
+                  ) ()
+                end;
+                c, t
 	    | None ->
 		(* dead code, inversion will find a proof of False by splitting on the rel'th hyp *)
 	      coq_nat_of_int rel, Lazy.force coq_nat)
@@ -261,7 +280,11 @@ let map_split f split =
 	Compute (lhs', f ty, RProgram (f c))
     | Split (lhs, y, z, cs) ->
       let lhs' = map_ctx_map f lhs in
-      Split (lhs', y, f z, Array.map (Option.map aux) cs)
+      Split (lhs', y, f z, Array.map (Option.map (fun (x, s, g) -> aux x,
+        map_ctx_map f s,
+        fun env evd p c ->
+          (* FIXME :/ *)
+          g env evd (f p) c)) cs)
     | Mapping (lhs, s) ->
        let lhs' = map_ctx_map f lhs in
        Mapping (lhs', aux s)

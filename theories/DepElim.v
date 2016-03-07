@@ -444,6 +444,10 @@ Polymorphic Lemma simplification_sigma2_dec : ∀ {A} `{EqDec A} {P : A -> Type}
     (x = y -> B) -> (sigmaI P p x = sigmaI P p y -> B).
 Proof. intros. apply X. apply inj_right_sigma in H0. assumption. Defined.
 
+Polymorphic Lemma simplification_sigma2_cst : ∀ {A} {P : Type} {B} (p : A) (x y : P),
+  (x = y -> B) -> (sigmaI (fun _ => P) p x = sigmaI (fun _ => P) p y -> B).
+Proof. intros. apply X. change (x = pr2 (sigmaI _ p y)). destruct H. reflexivity. Defined.
+
 Polymorphic Lemma Id_simplification_sigma2 : ∀ {A} `{HSets.HSet A} {P : A -> Type} {B}
                                                (p : A) (x y : P p),
   (Id x y -> B) -> (Id (sigmaI P p x) (sigmaI P p y) -> B).
@@ -848,6 +852,7 @@ Ltac recursive_equations :=
    by [Equations]. *)
 
 Ltac equations := set_eos ;
+  (*match goal with |- ?gl => idtac gl end;*)
   match goal with
     | [ |- ∀ x : _, _ ] => intro ; recursive_equations
     | [ |- let x := _ in ?T ] => intro x ; exact x

@@ -40,7 +40,7 @@ val define_tree :
   Evar_kinds.obligation_definition_status ->
   Evd.evar_map ref ->
   env ->
-  Id.t * 'a * 'b ->
+  Id.t * Context.rel_context * constr ->
   rec_info option ->
   'c ->
   splitting ->

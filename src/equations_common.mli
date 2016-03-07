@@ -188,6 +188,9 @@ val coq_sigma : Globnames.global_reference lazy_t
 val coq_sigmaI : Globnames.global_reference lazy_t
 val coq_pr1 : Names.projection lazy_t
 val coq_pr2 : Names.projection lazy_t
+
+val coq_simplification_sigma1 : Globnames.global_reference lazy_t
+val coq_simplification_sigma2 : Globnames.global_reference lazy_t
 			    
 val coq_zero : constr lazy_t
 val coq_succ : constr lazy_t
@@ -210,6 +213,10 @@ val mkHEq :
   Evd.evar_map ref ->
   Term.types -> Term.constr -> Term.types -> Term.constr -> Term.constr
 val mkHRefl : Evd.evar_map ref -> Term.types -> Term.constr -> Term.constr
+val mkEqRect :
+  Evd.evar_map ref -> bool ->
+  Term.types -> Term.constr -> Term.constr -> Term.constr ->
+  Term.constr -> Term.constr -> Term.constr
 
 (** Bindings to theories/ files *)
 
@@ -234,6 +241,8 @@ val coq_list_ind : Term.constr lazy_t
 val coq_list_nil : Term.constr lazy_t
 val coq_list_cons : Term.constr lazy_t
 val coq_noconfusion_class : Term.constr lazy_t
+val coq_noconfusion : Term.constr lazy_t
+val coq_eqdec_class : Term.constr lazy_t
 val coq_inacc : Term.constr lazy_t
 val coq_block : Term.constr lazy_t
 val coq_hide : Term.constr lazy_t

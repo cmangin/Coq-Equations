@@ -217,7 +217,7 @@ let rec aux_ind_fun info = function
 	(fun i -> 
 	  match splits.(pred i) with
 	  | None -> to82 (simpl_dep_elim_tac ())
-	  | Some s ->
+	  | Some (s, _, _) ->
 	      tclTHEN (to82 (simpl_dep_elim_tac ()))
 		(aux_ind_fun info s))
 	  
@@ -289,7 +289,7 @@ let subst_rec_split evd redefine f prob s split =
 	  it_mkLambda_or_LetIn (applistc f args) lctx
 	else f
       in
-      let substf = single_subst (Global.env ()) evd rel (PInac fK) ctx
+      let substf = fst (single_subst (Global.env ()) evd rel (PInac fK) ctx)
       (* ctx[n := f] |- _ : ctx *) in
       compose_subst ~sigma:evd substf lhs') (id_subst ctx) s
     in
@@ -304,7 +304,30 @@ let subst_rec_split evd redefine f prob s split =
        let subst, lhs' = subst_rec cutprob s lhs in
        let n' = destRel (mapping_constr subst (mkRel n)) in
        Split (lhs', n', mapping_constr subst ty,
-	      Array.map (Option.map (aux cutprob s path)) cs)
+	      Array.map (Option.map (fun (x, m, f) -> aux cutprob s path x,
+              m,
+                fun env evd p c ->
+                  (* p and c are currently in lhs'. *)
+                  let p', c' = List.fold_left (fun (p, c) (id, _) ->
+                    (* The variables in p need to be lifted to make some room
+                     * for the variable standing for f. *)
+                    let rel, _, _ = lookup_rel_id id (pi1 lhs) in
+                    let p' = liftn 1 rel p in
+                    (* We need first to make c a closed term again, with one
+                     * more quantification for f. *)
+                    let rel', _, ty' = lookup_rel_id id (pi1 m) in
+                    let ctx, ctx' = List.chop rel' (pi1 m) in
+                    let c =
+                      let ctx = extended_rel_vect 0 ctx' in
+                        Reduction.beta_appvect c ctx in
+                    let c' = lift 1 c in
+                    let c' = it_mkLambda_or_LetIn c' ((Name id, None, ty') :: ctx') in
+                      p', c') (p, c) s
+                  in
+                  (* p' and c' are now in lhs. *)
+                  let c' = f env evd p' c' in
+                  (* The resulting c' is also in lhs. *)
+                    mapping_constr subst c')) cs)
 
     | Mapping (lhs, c) ->
        let subst, lhs' = subst_rec cutprob s lhs in
@@ -601,7 +624,7 @@ let build_equations with_ind env evd id info sign is_rec arity cst
 	  [ctx', patsconstrs, ty, f, false, c', None]
 	    
     | Split (_, _, _, cs) -> Array.fold_left (fun acc c ->
-	match c with None -> acc | Some c -> 
+	match c with None -> acc | Some (c, _, _) -> 
 	  acc @ computations prob f c) [] cs
 
     | Mapping (lhs, c) ->
@@ -904,7 +927,7 @@ let prove_unfolding_lemma info proj f_cst funf_cst split gl =
 	     let id = destVar (fst (decompose_app c)) in
 	     let splits = List.map_filter (fun x -> x) (Array.to_list splits) in
 	       to82 (abstract (of82 (tclTHEN_i (to82 (depelim id))
-				  (fun i -> let split = nth splits (pred i) in
+				  (fun i -> let split, _, _ = nth splits (pred i) in
 					      tclTHENLIST [unfolds; aux split])))) gl
 	  | _ -> tclFAIL 0 (str"Unexpected unfolding goal") gl)
 	    
@@ -980,7 +1003,7 @@ let update_split evd is_rec cmap f prob id split =
 	  | Some s -> Mapping (s, rest)
 	  | None -> rest)
       | Mapping (lhs, s) -> Mapping (lhs, aux s)
-      | Split (lhs, y, z, cs) -> Split (lhs, y, z, Array.map (Option.map aux) cs)
+      | Split (lhs, y, z, cs) -> Split (lhs, y, z, Array.map (Option.map (fun (x, m, f) -> aux x, m, f)) cs)
       | RecValid (id, c) -> RecValid (id, aux c)
       | Valid (lhs, y, z, w, u, cs) ->
 	Valid (lhs, y, z, w, u, 

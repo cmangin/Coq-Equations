@@ -86,7 +86,7 @@ Proof.
     - inversion H1.
     - clear H. subst call0. unfold nat_to_fin_obligation_1 in *. f_equal.
         simp fin_to_nat in H3. noconf H3.
-        replace (Lt.lt_S_n (fin_to_nat f) n (fin_lt_n (S n) (fs f))) with (fin_lt_n n f) in * by (apply proof_irrelevance).
+        replace (Lt.lt_S_n (fin_to_nat f) n0 (fin_lt_n (S n0) (fs f))) with (fin_lt_n n0 f) in * by (apply proof_irrelevance).
         apply H1; reflexivity.
 Qed.
 

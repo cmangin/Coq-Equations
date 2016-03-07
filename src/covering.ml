@@ -63,7 +63,8 @@ type path = Evd.evar list
 
 type splitting = 
   | Compute of context_map * types * splitting_rhs
-  | Split of context_map * int * types * splitting option array
+  | Split of context_map * int * types *
+      (splitting * context_map * (env -> Evd.evar_map ref -> types -> constr -> constr)) option array
   | Valid of context_map * types * identifier list * tactic *
       (Proofview.entry * Proofview.proofview) *
       (goal * constr list * context_map * context_map option * splitting) list
@@ -182,7 +183,7 @@ let pr_context_map env (delta, patcs, gamma) =
   let ctx' = pr_context env gamma in
     (if List.is_empty delta then ctx else ctx ++ spc ()) ++ str "|-" ++ spc ()
     ++ prlist_with_sep spc (pr_pat env') (List.rev patcs) ++
-      str " : "  ++ ctx'
+    str " : "  ++ ctx'
 
 let ppcontext_map context_map = pp (pr_context_map (Global.env ()) context_map)
 
@@ -512,11 +513,28 @@ let invert_subst env sigma (g,p,d) =
 let lift_subst evd (ctx : context_map) (g : rel_context) = 
   let map = List.fold_right (fun decl acc -> push_mapping_context decl acc) g ctx in
     check_ctx_map evd map
-    
+
+(* Auxiliary function to build a proof term in the case of
+ * a substitution. *)
+let build_subst_term ctx sctx x t mkeq mkeqrect p c =
+  match List.chop (pred x) ctx with
+  | _, [] -> assert false
+  | ctx', (n, _, ty) :: rest ->
+    let lenctx' = List.length ctx' in 
+    let c = let ctx = extended_rel_vect (lenctx' + 2) rest in
+      Reduction.beta_appvect c ctx in
+    let p = lift (lenctx' + 2) (mkLambda (n, ty, it_mkProd_or_LetIn p ctx')) in
+    let c = mkeqrect (lift (succ x) ty) (lift 1 t) p c (mkRel (succ x)) (mkRel 1) in
+    let tyeq = mkeq (lift x ty) (mkRel x) t in
+    let c = mkApp (c, extended_rel_vect 1 ctx') in
+    let c = mkLambda (Anonymous, tyeq, c) in
+      it_mkLambda_or_LetIn c ctx
+
 let single_subst env evd x p g =
   let t = pat_constr p in
     if eq_constr t (mkRel x) then
-      id_subst g
+      id_subst g,
+      fun _ _ _ c -> c
     else if noccur_between 1 x t then
       (* The term to substitute refers only to previous variables. *)
       let substctx = subst_in_ctx x t g in
@@ -529,56 +547,228 @@ let single_subst env evd x p g =
       (* let pats = list_tabulate  *)
       (* 	(fun i -> let k = succ i in if k = x then p else PRel k) *)
       (* 	(List.length g) *)
-      in mk_ctx_map evd substctx pats g
+      in mk_ctx_map evd substctx pats g,
+        build_subst_term g substctx x t
     else
-      let (ctx, s, g), _ = strengthen env evd g x t in
+      let (ctx, s, g), reorder = strengthen env evd g x t in
+      let sreorder = Array.init (List.length reorder) (fun _ -> mkRel 0) in
+      List.iter (fun (i, j) -> sreorder.(i-1) <- mkRel j) reorder;
+      let reorder = substl (Array.to_list sreorder) in
       let x' = match nth s (pred x) with PRel i -> i | _ -> error "Occurs check singleton subst"
       and t' = specialize_constr s t in
 	(* t' is in ctx. Do the substitution of [x'] by [t] now 
 	   in the context and the patterns. *)
       let substctx = subst_in_ctx x' t' ctx in
       let pats = List.map_i (fun i p -> subst_constr_pat x' (lift (-1) t') p) 1 s in
-	mk_ctx_map evd substctx pats g
-    
+	mk_ctx_map evd substctx pats g,
+        fun mkeq mkeqrect p c ->
+          let p = specialize_constr s p in
+          let c = build_subst_term ctx substctx x' t' mkeq mkeqrect p c in
+          let c = let ctx = extended_rel_vect 0 ctx in
+            Reduction.beta_appvect c ctx in
+          let c = reorder c in
+            it_mkLambda_or_LetIn c g
+
+let p_of_sigma sigma = (snd (destApp sigma)).(1)
+
+let rec rel_context_of_sigma acc sigma = function
+| [] -> assert false
+| [_] -> (Anonymous, None, sigma) :: acc
+|  _ :: l ->
+    let p = p_of_sigma sigma in
+    let n, ty, body = destLambda p in
+      rel_context_of_sigma ((n, None, ty) :: acc) body l
+
 exception Conflict
 exception Stuck
 
 type 'a unif_result = UnifSuccess of 'a | UnifFailure | UnifStuck
-      
+
+(* We assume the goal to solve to be:
+ *   g |- x = y -> P *)
 let rec unify env evd flex g x y =
-  if eq_constr x y then id_subst g
+  (*
+  begin
+    let env = push_rel_context g env in
+    msg_info (str"[unify]");
+    msg_info (Printer.pr_rel_context env !evd g);
+    msg_info (Printer.pr_constr_env env !evd x);
+    msg_info (Printer.pr_constr_env env !evd y);
+  end;
+  *)
+  if eq_constr x y then
+    id_subst g,
+    fun env evd _ c ->
+      let c =
+        let ctx = extended_rel_vect 0 g in
+          Reduction.beta_appvect c ctx in
+      let eqenv = push_rel_context g env in
+      let ty = Retyping.get_type_of eqenv !evd x in
+      let tyeq = mkEq evd ty x y in
+      let c = mkLambda (Anonymous, tyeq, (lift 1 c)) in
+        it_mkLambda_or_LetIn c g
   else
     match kind_of_term x with
     | Rel i -> 
       if Int.Set.mem i flex then
-	single_subst env evd i (PInac y) g
+        let s, f = single_subst env !evd i (PInac y) g in
+        s, fun env evd -> f (mkEq evd) (mkEqRect evd true)
       else raise Stuck
     | _ ->
       match kind_of_term y with
       | Rel i ->
 	if Int.Set.mem i flex then
-	  single_subst env evd i (PInac x) g
+          let s, f = single_subst env !evd i (PInac x) g in
+          s, fun env evd -> f (mkEq evd) (mkEqRect evd false)
 	else raise Stuck
       | _ ->
 	let (c, l) = decompose_app x 
 	and (c', l') = decompose_app y in
 	  if isConstruct c && isConstruct c' then
 	    if eq_constr c c' then
-	      unify_constrs env evd flex g l l'
+              let pconstr = destConstruct c in
+              let s, f = unify_constrs env evd flex g l l' in
+              s, fun env evd p c ->
+                (* fun (e : x = y) => [f p c] (noConfusion e) *)
+                (* Fetch the adequate NoConfusion class. *)
+                let eqenv = push_rel_context g env in
+                let ty = Retyping.get_type_of eqenv !evd x in
+                let noconf_ty = mkApp (Lazy.force coq_noconfusion_class, [| ty |]) in
+                let noconf_cls =
+                  try
+                    let env = push_rel_context g env in
+                      Evarutil.evd_comb1
+                        (Typeclasses.resolve_one_typeclass env) evd noconf_ty
+                  with Not_found -> (* FIXME *) mkProp
+                in
+                (* Apply it to the correct arguments. *)
+                let arg = mkApp (Lazy.force coq_noconfusion,
+                  [| ty; noconf_cls; lift 1 x; lift 1 y; mkRel 1 |]) in
+                let tyeq = mkEq evd ty x y in
+                let ty = type_of_constructor env pconstr in
+                let ctx, concl = decompose_prod_assum ty in
+                let sigma, _, _ = Sigma.telescope evd ((Anonymous, None, concl) ::
+                  ctx) in
+                let c = let ctx = extended_rel_vect 1 g in
+                  Reduction.beta_appvect (f env evd p c sigma) ctx in
+(*                let c = mkApp (c, [| arg |]) ini*)
+                let c = Reduction.beta_appvect c [| arg |] in
+                let c = mkLambda (Anonymous, tyeq, c) in
+                  it_mkLambda_or_LetIn c g
 	    else raise Conflict
 	  else raise Stuck
 
-and unify_constrs env evd flex g l l' = 
+and unify_constrs env evd flex g l l' =
+  if true then begin
+  let env = push_rel_context g env in
+    msg_info (str"[unify_constrs]");
+    msg_info (Printer.pr_rel_context env !evd g);
+    msg_info (Pp.prlist_with_sep (fun () -> str " -- ")
+      (Printer.pr_constr_env env !evd) l);
+    msg_info (Pp.prlist_with_sep (fun () -> str " -- ")
+      (Printer.pr_constr_env env !evd) l');
+  end;
+  
   match l, l' with
-  | [], [] -> id_subst g
+  | [], [] -> id_subst g, fun _ _ _ c _ -> c
   | hd :: tl, hd' :: tl' ->
-    let (d,s,_ as hdunif) = unify env evd flex g hd hd' in
+    (* Perform unification at the head of the telescope. *)
+    let (d,s,_ as hdunif), hdf = unify env evd flex g hd hd' in
+    (* Specialize everything. *)
     let specrest = map (specialize_constr s) in
-    let tl = specrest tl and tl' = specrest tl' in
-    let tlunif = unify_constrs env evd flex d tl tl' in
-      compose_subst ~sigma:evd tlunif hdunif
+    let tl, tl' = specrest tl, specrest tl' in
+    (* Perform unification in the tail of the telescope. *)
+    let tlunif, tlf = unify_constrs env evd flex d tl tl' in
+      compose_subst ~sigma:!evd tlunif hdunif,
+      fun env evd p c sigma ->
+        (* Get the term built to unify the tails. *)
+        let p' = specialize_constr s p in
+        let sigma' = specialize_constr s sigma in
+        
+        (* Get the type of the tail of the telescope. *)
+        let psigma, psigma' =
+          match tl with
+          | [] -> sigma, sigma'
+          | _ -> p_of_sigma sigma, p_of_sigma sigma'
+        in
+        let sigma' = let hd = specialize_constr s hd in
+          Reduction.beta_appvect psigma' [| hd |] in
+        let c = tlf env evd p' c sigma' in
+
+        begin match l, l' with
+          | [_], [_] -> hdf env evd p c
+          | _ :: _, _ :: _ ->
+            (* If the tails are non-empty, we will need to prefix the goal
+             * with the equality between the telescopes. *)
+            
+            (* First, get the context of types of the telescopes. *)
+            let tys = rel_context_of_sigma [] sigma l in
+            (* Build an actual telescope. *)
+            let _, _, tele = Sigma.telescope evd tys in
+            let tel = substnl (List.rev l) 0 tele in
+            let tel' = substnl (List.rev l') 0 tele in
+            (* Build the equality. *)
+            let telety = let env = push_rel_context g env in
+              Retyping.get_type_of env !evd tel in
+            let eq = mkEq evd telety tel tel' in
+
+            (* If the tails are non-enmpty, we also need to
+             * simplify the first components of the telescopes,
+             * which should now be convertible. *)
+            let c = begin
+            let hd = specialize_constr s hd in
+            let tel = specialize_constr s tel in
+            let tel' = specialize_constr s tel' in
+            (* Compute the type of the index at the head. *)  
+            let ty = let env = push_rel_context d env in
+              Retyping.get_type_of env !evd hd in
+            (* Fetch the typeclasses for decidability of equality
+             * on the heads.
+             * FIXME: we only need K in general.
+             * FIXME: if the rest of the telescope does not depend
+             *        on this argument, we do not need K at all. *)
+            let eqdec_ty = mkApp (Lazy.force coq_eqdec_class, [| ty |]) in
+            let eqdec_cls =
+              try
+                let env = push_rel_context d env in
+                  Evarutil.evd_comb1
+                    (Typeclasses.resolve_one_typeclass env) evd eqdec_ty
+              with Not_found -> (* FIXME *) mkProp 
+            in
+            (* Build the application of the simplification lemma to
+             * the correct arguments. *)
+            let c = let ctx = extended_rel_vect 0 d in
+              Reduction.beta_appvect c ctx in
+            let tel = (snd (destApp tel)).(3) in
+            let tel' = (snd (destApp tel')).(3) in
+            let c = Sigma.mkAppG evd (Lazy.force coq_simplification_sigma2)
+                [| ty; eqdec_cls; psigma'; p'; hd; tel; tel'; c |] in
+            let c = it_mkLambda_or_LetIn c d in
+            
+            (* Get the term built to unify the heads. *)
+            let p = mkArrow eq (lift 1 p) in
+              hdf env evd p c
+            end in
+
+            (* Now we need to get back to the original goal,
+             * with no single equality at the head, using another
+             * lemma of simplification on the telescopes. *)
+            let ty = let env = push_rel_context g env in
+              Retyping.get_type_of env !evd hd in
+            let c = let ctx = extended_rel_vect 0 g in
+              Reduction.beta_appvect c ctx in
+            let tel = (snd (destApp tel)).(3) in
+            let tel' = (snd (destApp tel')).(3) in
+            let c = Sigma.mkAppG evd (Lazy.force coq_simplification_sigma1)
+              [| ty; psigma; p; hd; hd'; tel; tel'; c |] in
+            it_mkLambda_or_LetIn c g
+          | _, _ -> assert false end
   | _, _ -> raise Conflict
 
+let get_sigma_p sigma =
+  let _, args = destApp sigma in
+    args.(2)
+ 
 let flexible pats gamma =
   let (_, flex) =
     fold_left2 (fun (k,flex) pat decl ->
@@ -719,8 +909,12 @@ let interp_constr_in_rhs env ctx evars (i,comp,impls) ty s lets c =
 	  evars := Typeclasses.resolve_typeclasses ~filter:Typeclasses.all_evars env !evars;
 	  let c' = nf_evar !evars (substnl pats 0 c) in
 	    c', nf_evar !evars (substnl pats 0 ty')
-	  
-let unify_type env evars before id ty after =
+
+let unify_type env evars before id ty after dep =
+  let oldctx = after @ ((id, None, ty) :: before) in
+  let before, ty =
+    if dep then (id, None, ty) :: before, lift 1 ty
+    else before, ty in
   try
     let next_ident_away = 
       let ctxids = ref (ids_of_rel_context before @ ids_of_rel_context after) in
@@ -737,6 +931,7 @@ let unify_type env evars before id ty after =
     let vs = map (Tacred.whd_simpl envb !evars) args in
     let params = map (Tacred.whd_simpl envb !evars) params in
     let newty = applistc (mkIndU ind) (params @ vs) in
+    let newty = if dep then lift (-1) newty else newty in
     let cstrs = Inductiveops.type_of_constructors envb ind in
     let cstrs = 
       Array.mapi (fun i ty ->
@@ -761,9 +956,16 @@ let unify_type env evars before id ty after =
 	let q = inaccs_of_constrs (rels_of_tele ctx) in	
 	let constrpat = PCstr (((fst ind, succ i), snd ind), 
 			       inaccs_of_constrs params @ patvars_of_tele ctx) in
+        let args =
+          if dep then args @ [pat_constr constrpat]
+          else args in
 	  env', ctx, constr, constrpat, q, args)
 	cstrs
     in
+    let vs = if dep then vs @ [mkRel 1] else vs in
+    let argsctx, _ = get_arity envb indf in
+    let indty = build_dependent_inductive envb indf in
+    let argsctx = if dep then (Anonymous, None, indty) :: argsctx else argsctx in
     let res = 
       Array.map (fun (env', ctxc, c, cpat, q, us) -> 
 	let _beforelen = length before and ctxclen = length ctxc in
@@ -772,8 +974,18 @@ let unify_type env evars before id ty after =
 	    let vs' = map (lift ctxclen) vs in
 	    let p1 = lift_pats ctxclen (inaccs_of_constrs (rels_of_tele before)) in
 	    let flex = flexible (p1 @ q) fullctx in
-	    let s = unify_constrs env !evars flex fullctx vs' us in
-	      UnifSuccess (s, ctxclen, c, cpat)
+	    let s, f = unify_constrs env evars flex fullctx vs' us in
+            let f' env evd p c =
+              (let sigma =
+                match argsctx with
+                | [] -> mkProp
+                | _ -> pi1 (Sigma.telescope evd argsctx) in
+              let sigma = lift ctxclen sigma in
+              let p = it_mkProd_or_LetIn p after in
+              let p = if dep then lift ctxclen p
+                      else lift (ctxclen - 1) p in
+              f env evd p c sigma) in
+	      UnifSuccess (s, f', ctxclen, c, cpat)
 	  with Conflict -> UnifFailure | Stuck -> UnifStuck) cstrs
     in Some (newty, res)
   with Not_found -> (* not an inductive type *)
@@ -837,7 +1049,7 @@ let pr_splitting env split =
 	      (fun acc so -> acc ++ 
 		 match so with
 		 | None -> str "*impossible case*"
-		 | Some s -> aux s)
+		 | Some (s, _, _) -> aux s)
 	      (mt ()) cs) ++ spc ()
     | Mapping (ctx, s) ->
        hov 2 (str"Mapping " ++ pr_context_map env ctx ++ spc () ++ aux s)
@@ -899,25 +1111,49 @@ let do_renamings ctx =
       ctx ([], [])
   in ctx'
 
-let split_var (env,evars) var delta =
+let split_var (env,evars) var delta gl =
   (* delta = before; id; after |- curpats : gamma *)	    
   let before, (id, b, ty as decl), after = split_tele (pred var) delta in
-  let unify = unify_type env evars before id ty after in
+  let dep =
+    let ty = it_mkProd_or_LetIn gl after in
+    dependent (mkRel 1) ty
+  in
+  let unify = unify_type env evars before id ty after dep in
   let branch = function
     | UnifFailure -> None
     | UnifStuck -> assert false
-    | UnifSuccess ((ctx',s,ctx), ctxlen, cstr, cstrpat) ->
+    | UnifSuccess ((ctx',s,_ctx), f, ctxlen, cstr, cstrpat) ->
 	(* ctx' |- s : before ; ctxc *)
-	(* ctx' |- cpat : ty *)
-	let cpat = specialize s cstrpat in
+        (* ctx' |- cpat : ty *)
+        let cpat = specialize s cstrpat in
 	let ctx' = do_renamings ctx' in
-	(* ctx' |- spat : before ; id *)
-	let spat =
-	  let ctxcsubst, beforesubst = List.chop ctxlen s in
-	    check_ctx_map !evars (ctx', cpat :: beforesubst, decl :: before)
-	in
-	  (* ctx' ; after |- safter : before ; id ; after = delta *)
-	  Some (lift_subst !evars spat after)
+	
+        (* ctx' |- spat : before ; id *)
+        
+        let _ctxcsubst, beforesubst = List.chop ctxlen s in
+        let beforesubst =
+          if dep then List.tl beforesubst
+          else beforesubst in
+        let subst = cpat :: beforesubst in
+        let ctx = decl :: before in
+
+        let ctx', subst, ctx =
+          if dep || true then ctx', subst, ctx
+          else
+            let nvar = match List.hd beforesubst with
+            | PRel n -> n
+            | _ -> assert false in
+            
+            let ctx'hd, _, ctx'tl = split_context (nvar - 1) ctx' in
+            let ctx'hd = lift_rel_context (-1) ctx'hd in
+            let ctx' = ctx'hd @ ctx'tl in
+
+            let subst = map (lift_patn (-1) nvar) subst in
+            ctx', subst, ctx
+        in
+        let spat = check_ctx_map !evars  (ctx', subst, ctx) in
+	(* ctx' ; after |- safter : before ; id ; after = delta *)
+	  Some (lift_subst !evars spat after, f)
   in
     match unify with
     | None -> None
@@ -935,7 +1171,7 @@ let split_var (env,evars) var delta =
 
 let find_empty env delta =
   let r = List.filter (fun v -> 
-    match split_var env v delta with
+    match split_var env v delta mkProp with
     | None -> false
     | Some (v, _, r) -> Array.for_all (fun x -> x == None) r)
     (CList.init (List.length delta) succ)
@@ -1290,20 +1526,21 @@ let rec covering_aux env evars data prev clauses path (ctx,pats,ctx' as prob) le
 	fold_left (fun acc var ->
 	  match acc with
 	  | None -> 
-	    (match split_var (env,evars) var (pi1 prob) with
+	    (match split_var (env,evars) var (pi1 prob) ty with
 	    | Some (var, newctx, s) ->
 	      let prob' = (newctx, pats, ctx') in
-	      let coverrec s = covering_aux env evars data []
+	      let coverrec s = 
+                covering_aux env evars data []
 		(List.rev prev @ clauses) path (compose_subst ~sigma:!evars s prob')
 		(specialize_rel_context (pi2 s) lets)
 		(specialize_constr (pi2 s) ty)
 	      in
 		(try 
-		   let rest = Array.map (Option.map (fun x -> 
+		   let rest = Array.map (Option.map (fun (x, f) -> 
 		     match coverrec x with
 		     | None -> raise Not_found
-		     | Some s -> s)) s 
-		   in Some (Split (prob', var, ty, rest))
+		     | Some s -> s, x, f)) s 
+                   in Some (Split (prob', var, ty, rest))
 		 with Not_found -> None)
 	    | None -> None) 
 	  | _ -> acc) None blocks)

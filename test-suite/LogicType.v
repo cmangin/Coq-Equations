@@ -2,7 +2,7 @@ From Equations Require Import Equations DepElimDec HSets.
 
 Set Universe Polymorphism.
 
-Equations Logic Type Id Id_rect Empty unit tt.
+Equations Logic Type Id id_refl Empty unit tt.
 
 Import IdNotations.
 

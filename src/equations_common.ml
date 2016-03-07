@@ -179,6 +179,8 @@ let fresh_id avoid id gl =
 
 let coq_eq = Lazy.from_fun Coqlib.build_coq_eq
 let coq_eq_refl = lazy ((Coqlib.build_coq_eq_data ()).Coqlib.refl)
+let coq_eq_rect = lazy (init_reference ["Coq"; "Init"; "Logic"] "eq_rect")
+let coq_eq_rect_r = lazy (init_reference ["Coq"; "Init"; "Logic"] "eq_rect_r")
 
 let coq_heq = lazy (Coqlib.coq_reference "mkHEq" ["Logic";"JMeq"] "JMeq")
 let coq_heq_refl = lazy (Coqlib.coq_reference "mkHEq" ["Logic";"JMeq"] "JMeq_refl")
@@ -249,6 +251,10 @@ let mkHRefl evd t x =
   mkapp evd coq_heq_refl
     [| refresh_universes_strict evd t; x |]
 
+let mkEqRect evd b t x p c y e =
+  let eq_rect = if b then coq_eq_rect_r else coq_eq_rect in
+    mkapp evd eq_rect [| t; x; p; c; y; e |]
+
 let dummy_loc = Loc.dummy_loc 
 type 'a located = 'a Loc.located
 
@@ -288,6 +294,9 @@ let coq_list_nil = lazy (init_constant list_path "nil")
 let coq_list_cons = lazy (init_constant list_path "cons")
 
 let coq_noconfusion_class = lazy (init_constant ["Equations";"DepElim"] "NoConfusionPackage")
+let coq_noconfusion = lazy (init_constant ["Equations";"DepElim"] "noConfusion")
+
+let coq_eqdec_class = lazy (init_constant ["Equations";"EqDec"] "EqDec")
   
 let coq_inacc = lazy (init_constant ["Equations";"DepElim"] "inaccessible_pattern")
 let coq_block = lazy (init_constant ["Equations";"DepElim"] "block")
@@ -307,6 +316,11 @@ let subterm_relation_base = "subterm_relation"
 
 let coq_sigma = lazy (init_reference ["Equations";"Init"] "sigma")
 let coq_sigmaI = lazy (init_reference ["Equations";"Init"] "sigmaI")
+
+let coq_simplification_sigma1 = lazy (init_reference ["Equations";"DepElim"]
+  "simplification_sigma1")
+let coq_simplification_sigma2 = lazy (init_reference ["Equations";"DepElim"]
+  "simplification_sigma2_dec")
 
 let init_projection dp i =
   let r = init_reference dp i in

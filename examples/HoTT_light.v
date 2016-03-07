@@ -9,6 +9,7 @@ Set Primitive Projections.
 
 Set Implicit Arguments.
 
+
 Definition id {A : Type} (a : A) : A := a.
 
 Section TypeEq.
@@ -64,8 +65,16 @@ Notation "x .2" := (proj2 x) (at level 3).
 Definition Sect {A B : Type} (s : A -> B) (r : B -> A) :=
   forall x : A, r (s x) = x.
 
-Equations ap {A B : Type} (f : A -> B) {x y : A} (p : x = y) : f x = f y :=
+Equations(nocomp) ap {A B : Type} (f : A -> B) {x y : A} (p : x = y) : f x = f y :=
 ap f id_refl := id_refl.
+
+Print ap_obligation_1.
+
+Goal forall {A : Type}  {x : A} {P : forall (y : A) (p : x = y), Type} {y : A} (p : x = y),
+  (P x id_refl) -> ((y; p) = (x; id_refl) -> P y p).
+Proof. intros.
+  destruct p. apply X. Qed. Print Unnamed_thm.
+
 Transparent ap.
 
 (** A typeclass that includes the data making [f] into an adjoin equivalence*)

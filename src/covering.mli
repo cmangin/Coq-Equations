@@ -108,7 +108,8 @@ type path = Evd.evar list
 
 type splitting =
     Compute of context_map * types * splitting_rhs
-  | Split of context_map * int * types * splitting option array
+  | Split of context_map * int * types *
+      (splitting * context_map * (env -> Evd.evar_map ref -> types -> constr -> constr)) option array
   | Valid of context_map * types * identifier list *
       Tacmach.tactic * (Proofview.entry * Proofview.proofview) *
       (Proof_type.goal * constr list * context_map * context_map option * splitting) list
@@ -203,7 +204,11 @@ val single_subst :
   Evd.evar_map ->
   Int.Set.elt ->
   pat ->
-  rel_context -> context_map
+  rel_context ->
+  context_map *
+  ((types -> constr -> constr -> constr) ->
+   (types -> constr -> constr -> constr -> constr -> constr -> constr) ->
+   types -> constr -> constr)
 
 (* Unification *)
 
@@ -214,18 +219,19 @@ type unification_result = (context_map * int * constr * pat) option
 
 val unify :
   env ->
-  Evd.evar_map ->
+  Evd.evar_map ref ->
   Int.Set.t ->
   rel_context ->
-  constr ->
-  constr -> context_map
+  constr -> constr ->
+  context_map * (env -> Evd.evar_map ref -> types -> constr -> constr)
 val unify_constrs :
   env ->
-  Evd.evar_map ->
+  Evd.evar_map ref ->
   Int.Set.t ->
   rel_context ->
   constr list ->
-  constr list -> context_map
+  constr list ->
+  context_map * (env -> Evd.evar_map ref -> types -> constr -> types -> constr)
 val flexible : pat list -> 'a list -> Int.Set.t
 val accessible : pat -> Int.Set.t
 val accessibles : pat list -> Int.Set.t
@@ -265,11 +271,12 @@ val unify_type :
   env ->
   Evd.evar_map ref ->
   rel_context ->
-  'a ->
+  Names.Name.t ->
   types ->
   rel_context ->
+  bool ->
   (constr *
-   ((context_map) * int *
+   (context_map * (env -> Evd.evar_map ref -> types -> constr -> constr) * int *
     constr * pat)
    unif_result array)
   option
@@ -285,8 +292,9 @@ val split_var :
   env * Evd.evar_map ref ->
   int ->
   rel_context ->
+  types ->
   (int * (name * Constr.t option * Constr.t) list *
-   context_map option array)
+   (context_map * (env -> Evd.evar_map ref -> types -> constr -> constr)) option array)
   option
 val find_empty : env * Evd.evar_map ref -> rel_context -> int option
 val rel_of_named_context :
