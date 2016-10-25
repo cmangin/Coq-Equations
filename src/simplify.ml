@@ -424,19 +424,21 @@ let with_retry (f : simplification_fun) (env : Environ.env)
     in
     (* Try to head-reduce the goal and reapply f. *) 
     let ty = reduce ty in
-    let name, ty1, ty2 = try Term.destProd ty
-      with Term.DestKO -> raise (CannotSimplify (str "The goal is not a product.")) in
-    let ty1 = reduce ty1 in
-    let ty = Constr.mkProd (name, ty1, ty2) in
-    (* If the head is an equality, reduce it. *)
+    (* We try to reduce further when the goal is a product. *)
     let ty = try
-      let name, ty1, ty2 = check_prod ty in
-      let tA, t1, t2 = check_equality ty1 in
-      let t1 = reduce t1 in
-      let t2 = reduce t2 in
-      let ty1 = Constr.mkApp (Builder.eq evd, [| tA; t1; t2 |]) in
-        Constr.mkProd (name, ty1, ty2)
+      let name, ty1, ty2 = Term.destProd ty in
+      let ty1 = reduce ty1 in
+      let ty = Constr.mkProd (name, ty1, ty2) in
+      (* If the head is an equality, reduce it. *)
+      try
+        let name, ty1, ty2 = check_prod ty in
+        let tA, t1, t2 = check_equality ty1 in
+        let t1 = reduce t1 in
+        let t2 = reduce t2 in
+        let ty1 = Constr.mkApp (Builder.eq evd, [| tA; t1; t2 |]) in
+          Constr.mkProd (name, ty1, ty2)
       with CannotSimplify _ -> ty
+      with Term.DestKO -> ty
     in
       f env evd (ctx, ty)
 
@@ -645,7 +647,7 @@ let maybe_pack (env : Environ.env) (evd : Evd.evar_map ref)
     in
     let tx =
       let _, _, tx, _ = Option.get (decompose_sigma valsig) in
-        Vars.substl args (Termops.pop tx)
+        Vars.substl (CList.rev args) (Termops.pop tx)
     in
     let tsimplify_ind_pack = Globnames.ConstRef (Lazy.force EqRefs.simplify_ind_pack) in
     let tB = Reductionops.beta_applist (tBfull, params) in

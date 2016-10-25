@@ -284,8 +284,8 @@ Lemma apply_noConfusion {A} {noconf : NoConfusionPackage A}
       (p q : A) {B : p = q -> Type} :
   (forall H : NoConfusion p q, B (noConfusion_inv H)) -> (forall H : p = q, B H).
 Proof.
-  intros. generalize (noConfusion_is_equiv H). destruct H.
-  intros <-. apply X.
+  intros. generalize (noConfusion_is_equiv H).
+  intros e. destruct e. apply X.
 Defined.
 
 Polymorphic
@@ -717,6 +717,7 @@ Global Opaque simplification_existT2 simplification_existT2_dec
        simplification_sigma2_dec_point
        simplification_heq simplification_K simplification_K_dec
        simplify_ind_pack simplified_ind_pack Id_simplification_sigma2.
+Global Opaque opaque_ind_pack_eq_inv.
 
 Ltac rewrite_sigma2_refl :=
   match goal with
@@ -775,6 +776,7 @@ Hint Unfold solution_left solution_right
   Id_solution_left_dep Id_solution_right_dep
   Id_solution_right_let Id_solution_left_let
   Id_simplification_sigma1
+  apply_noConfusion apply_noConfusionId
   eq_rect_r eq_rec eq_ind eq_ind_r : equations.
 
 (** Makes these definitions disappear at extraction time *)

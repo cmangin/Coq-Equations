@@ -17,10 +17,7 @@ Proof.
          (fun e : @eq nat n n =>
           forall _ : @eq ((fun x0 : nat => vect x0) n) (@eq_rect nat n (fun x0 : nat => vect x0) x n e) x, True)
          (fun _ : @eq (vect n) x x => I)))) *)
-  intros n x y.
-  simplify $-. Show Proof. Show Universes. simplify -. reflexivity. Set Printing Universes. Set Printing All. Qed. Show Proof. simplify -. exact I. Qed. Show Proof. simplify -. Show Proof. Qed. intros _. reflexivity. Qed. Show Proof.
-  reflexivity. Set Printing All. Set Printing Universes. Show Proof.
-Qed.
+  intros n x y. simplify ?. reflexivity. Qed.
 
 
 Require Import Equations.DepElimDec.
