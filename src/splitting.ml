@@ -119,47 +119,45 @@ let term_of_tree status isevar env (i, delta, ty) ann tree =
 	  it_mkLambda_or_LetIn (subst_vars substc c) ctx, it_mkProd_or_LetIn ty ctx
 	      
     | Split ((ctx, _, _), rel, ty, sp) -> 
-	let before, decl, after = split_tele (pred rel) ctx in
-	let evd = ref evm in
-	let branches = 
-	  Array.map (fun split -> 
-	    match split with
-	    | Some s -> let evm', c, t = aux !evd s in evd := evm'; c,t
-	    | None ->
-		(* dead code, inversion will find a proof of False by splitting on the rel'th hyp *)
-	      coq_nat_of_int rel, Lazy.force coq_nat)
-	    sp 
-	in
-	let evm = !evd in
-	let branches_ctx =
-	  Array.mapi (fun i (br, brt) -> (id_of_string ("m_" ^ string_of_int i), Some br, brt))
-	    branches
-	in
-	let n, branches_lets =
-	  Array.fold_left (fun (n, lets) (id, b, t) ->
-	    (succ n, (Name id, Option.map (lift n) b, lift n t) :: lets))
-	    (0, []) branches_ctx
-	in
-	let liftctx = lift_context (Array.length branches) ctx in
-	let evm, case =
-	  let ty = it_mkProd_or_LetIn ty liftctx in
-	  let ty = it_mkLambda_or_LetIn ty branches_lets in
-	  let nbbranches = (Name (id_of_string "branches"),
-			   Some (coq_nat_of_int (length branches_lets)),
-			   Lazy.force coq_nat)
-	  in
-	  let nbdiscr = (Name (id_of_string "target"),
-			Some (coq_nat_of_int (length before)),
-			Lazy.force coq_nat)
-	  in
-	  let ty = it_mkLambda_or_LetIn (lift 2 ty) [nbbranches;nbdiscr] in
-	  let evm, term = new_evar env evm ~src:(dummy_loc, QuestionMark status) ty in
-	  let ev = fst (destEvar term) in
-	    oblevars := Evar.Set.add ev !oblevars;
-	    evm, term
-	in       
-	let casetyp = it_mkProd_or_subst ty ctx in
-	  evm, mkCast(case, DEFAULTcast, casetyp), casetyp
+      if !Equations_common.ocaml_splitting then
+        failwith "Unimplemented!"
+      else
+        let before, decl, after = split_tele (pred rel) ctx in
+        let evm, branches = Array.fold_map (
+          fun evm -> function
+            | Some s -> let evm', c, t = aux evm s in evm', (c, t)
+            (* dead code, inversion will find a proof of False by splitting on the rel'th hyp *)
+            | None -> evm, (coq_nat_of_int rel, Lazy.force coq_nat)
+        ) evm sp in
+        let branches_ctx =
+          Array.mapi (fun i (br, brt) -> (id_of_string ("m_" ^ string_of_int i), Some br, brt))
+            branches
+        in
+        let n, branches_lets =
+          Array.fold_left (fun (n, lets) (id, b, t) ->
+            (succ n, (Name id, Option.map (lift n) b, lift n t) :: lets))
+            (0, []) branches_ctx
+        in
+        let liftctx = lift_context (Array.length branches) ctx in
+        let evm, case =
+          let ty = it_mkProd_or_LetIn ty liftctx in
+          let ty = it_mkLambda_or_LetIn ty branches_lets in
+          let nbbranches = (Name (id_of_string "branches"),
+               Some (coq_nat_of_int (length branches_lets)),
+               Lazy.force coq_nat)
+          in
+          let nbdiscr = (Name (id_of_string "target"),
+            Some (coq_nat_of_int (length before)),
+            Lazy.force coq_nat)
+          in
+          let ty = it_mkLambda_or_LetIn (lift 2 ty) [nbbranches;nbdiscr] in
+          let evm, term = new_evar env evm ~src:(dummy_loc, QuestionMark status) ty in
+          let ev = fst (destEvar term) in
+            oblevars := Evar.Set.add ev !oblevars;
+            evm, term
+        in       
+        let casetyp = it_mkProd_or_subst ty ctx in
+          evm, mkCast(case, DEFAULTcast, casetyp), casetyp
   in 
   let evm, term, typ = aux !isevar tree in
     isevar := evm;

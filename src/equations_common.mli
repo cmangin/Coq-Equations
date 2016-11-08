@@ -11,6 +11,9 @@ open Context
 open Environ
 open Names
 
+(* Options *)
+val ocaml_splitting : bool ref
+
 val debug : bool
 
 (* Tactics *)

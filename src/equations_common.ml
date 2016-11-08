@@ -46,6 +46,17 @@ let ($) f g = fun x -> f (g x)
 let (&&&) f g (x, y) = (f x, g y)
 let id x = x
 
+(* Options. *)
+let ocaml_splitting = ref false
+let _ = Goptions.declare_bool_option {
+  Goptions.optsync  = true;
+  Goptions.optdepr  = false;
+  Goptions.optname  = "splitting variables in OCaml";
+  Goptions.optkey   = ["Equations"; "OCaml"; "Splitting"];
+  Goptions.optread  = (fun () -> !ocaml_splitting);
+  Goptions.optwrite = (fun b -> ocaml_splitting := b)
+}
+
 (* Debugging infrastructure. *)
 
 let debug = true
