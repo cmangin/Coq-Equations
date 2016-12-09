@@ -318,6 +318,8 @@ let compose_term (evd : Evd.evar_map ref)
       (* Currently, [c2] is typed under the rel_context [ctx1]. We want
          to assign it to the evar [ev1], which means that we need to transpose
          it to the named_context of this evar. *)
+      (* FIXME Covering.named_of_rel_context does not use the same convention
+       * as Evarutil.push_rel_context_to_named_context. *)
       let subst, _ = Covering.named_of_rel_context ctx1 in
       let c2 = Vars.substl subst c2 in
       evd := Evd.define ev1 c2 !evd;

@@ -160,6 +160,30 @@ let term_of_tree status isevar env (i, delta, ty) ann tree =
           | _ -> assert false
         in
         (* Next we build the match to eliminate the fresh variable. *)
+        (* Now we need some information on the number of indices of the inductive
+         * type of [rel]. *)
+        let pind, args = Inductive.find_inductive env rel_ty in
+        let mib, oib = Global.lookup_pinductive pind in
+        let params, indices = List.chop mib.mind_nparams_rec args in
+        (* Build the context under which the fresh variable is declared. *)
+        let (_, _, fresh_ty) as fresh_decl, fresh_ctx, goal =
+          match Term.decompose_prod_n_assum (succ oib.mind_nrealargs) generalized_ty with
+          | decl :: rest, goal -> decl, rest, goal
+          | _ -> assert false
+        in
+        let case_ty = Term.it_mkLambda_or_LetIn goal (fresh_decl :: fresh_ctx) in
+        let branches_ty = Inductive.build_branches_type pind (mib, oib) params case_ty in
+        (* Now that we know the type of each branch, we can use simplify to do
+         * the next step. *)
+        let evd = ref evm in
+        let simpl_step = Simplify.simplify [Loc.dummy_loc, Simplify.Infer_many] env evd in
+        let branches = Array.map (fun ty ->
+          let new_ctx, ty = Term.decompose_prod_assum ty in
+          let ty = Tacred.hnf_constr env !evd ty in
+          let new_ctx = Namegen.name_context env new_ctx in
+          let res = simpl_step (new_ctx @ ctx, ty) in
+            ()
+        ) branches_ty in
         failwith "Unimplemented!"
       else
         let before, decl, after = split_tele (pred rel) ctx in
