@@ -48,6 +48,7 @@ theories/Equations.v
 theories/TransparentEquations.v
 theories/OpaqueEquations.v
 theories/Fin.v
+theories/Generalization.v
 test-suite/Basics.v
 test-suite/BasicsDec.v
 test-suite/rec.v

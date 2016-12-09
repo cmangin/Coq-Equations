@@ -63,3 +63,6 @@ val curry : Names.Name.t -> Term.constr ->
 
 val uncurry_call : Environ.env -> Evd.evar_map -> Term.constr ->
                    Evd.evar_map * Term.constr * Term.types
+
+val generalization : Environ.env -> Term.types -> Term.constr -> Evd.evar_map ->
+                     Evd.evar_map * Term.constr
