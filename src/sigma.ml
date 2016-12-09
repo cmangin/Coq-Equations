@@ -446,14 +446,17 @@ let generalization (env : Environ.env) (ty : Term.types) (c : Term.constr)
     Term.it_mkProd_or_LetIn goal ((Anonymous, None, eq) :: arity) in
   (* The final type. *)
   let gen_id = Namegen.next_ident_away_in_goal (Names.id_of_string "H") ids in
-  let ctx =
-    [(Names.Name.Name gen_id, None, generalized_goal); (Names.Name.Name pred_id, None, pred_ty)] in
+  let generalization_ty = Constr.mkProd (Names.Name.Name gen_id, generalized_goal, Constr.mkRel 2) in
+  let generalization_ty = Constr.mkLambda (Names.Name.Name pred_id, pred_ty, generalization_ty) in
+  (*
   let generalization_ty = Term.it_mkProd_or_LetIn (Constr.mkRel 2) ctx in
-
+  *)
   (* Build the corresponding proof. *)
   let proof = Term.applist (Constr.mkRel 1, indices) in
   let refl = Equations_common.mkRefl evd tysig left_valsig in
   let proof = Constr.mkApp (proof, [| c; refl |]) in
+  let ctx =
+    [(Names.Name.Name gen_id, None, generalized_goal); (Names.Name.Name pred_id, None, pred_ty)] in
   let generalization = Term.it_mkLambda_or_LetIn proof ctx in
 
   (* Build the instance itself. *)

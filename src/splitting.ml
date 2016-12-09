@@ -122,6 +122,7 @@ let term_of_tree status isevar env (i, delta, ty) ann tree =
       if !Equations_common.ocaml_splitting then
         (* Fetch the type of the variable that we want to eliminate. *)
         let (_, _, rel_ty) = List.nth ctx (pred rel) in
+        let rel_ty = Vars.lift rel rel_ty in
         let rel_t = Constr.mkRel rel in
         (* First, prepare a term corresponding to the generalization step. *)
         (* Build the Generalization instance applied to this variable. *)
@@ -129,7 +130,6 @@ let term_of_tree status isevar env (i, delta, ty) ann tree =
           let cls = Lazy.force Equations_common.coq_generalization_class in
           Typeclasses.class_info cls
         in
-        let rel_ty = Vars.lift rel rel_ty in
         (* Now we can try to get an instance. This should not fail. *)
         (* TODO Still add a try/with just in case. *)
         let evm, gen_inst =
@@ -142,15 +142,24 @@ let term_of_tree status isevar env (i, delta, ty) ann tree =
         (* Now we can get the type of the generalization in order to
          * build the next goal. *)
         let evm, gen_ty, gen_proof =
-          let _, _, ty = List.nth gen_cls_info.Typeclasses.cl_projs 0 in
+          let _, _, gen_ty = List.nth gen_cls_info.Typeclasses.cl_projs 0 in
           let _, _, proof = List.nth gen_cls_info.Typeclasses.cl_projs 1 in
-          let ty, proof =  Option.get proof, Option.get proof in
-          let evm, ty = Evarutil.new_global evm (Globnames.ConstRef ty) in
+          let gen_ty, proof =  Option.get gen_ty, Option.get proof in
+          let evm, gen_ty = Evarutil.new_global evm (Globnames.ConstRef gen_ty) in
           let evm, proof = Evarutil.new_global evm (Globnames.ConstRef proof) in
-          let ty = Constr.mkApp (ty, [| rel_ty; rel_t; gen_inst |]) in
-          let proof = Constr.mkApp (proof, [| rel_ty; rel_t; gen_inst |]) in
-            evm, ty, proof
+          let gen_ty = Constr.mkApp (gen_ty, [| rel_ty; rel_t; gen_inst; ty |]) in
+          let proof = Constr.mkApp (proof, [| rel_ty; rel_t; gen_inst; ty |]) in
+            evm, gen_ty, proof
         in
+        let gen_ty = Tacred.hnf_constr env evm gen_ty in
+        (* [generalized_ty] is a valid type under context [ctx] and is the goal
+         * after generalization. *)
+        let generalized_ty =
+          match Term.decompose_prod_n 1 gen_ty with
+          | [_, ty], _ -> ty
+          | _ -> assert false
+        in
+        (* Next we build the match to eliminate the fresh variable. *)
         failwith "Unimplemented!"
       else
         let before, decl, after = split_tele (pred rel) ctx in
