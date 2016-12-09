@@ -420,9 +420,7 @@ let generalization (env : Environ.env) (ty : Term.types) (c : Term.constr)
   (* A predicate identifiant. *)
   let pred_id = Namegen.next_ident_away_in_goal (Names.id_of_string "P") ids in
   (* A type for the predicate. *)
-  let pred_ty =
-    let new_Type = Evarutil.e_new_Type env evd in
-      Constr.mkProd (Names.Anonymous, ty, new_Type) in
+  let pred_ty = Evarutil.e_new_Type env evd in
 
   (* Build the type of the generalized proof. *)
   (* First, get the arity of the inductive family. *)
@@ -434,8 +432,6 @@ let generalization (env : Environ.env) (ty : Term.types) (c : Term.constr)
   let _, _, _, _, _, _, right_valsig, tysig =
     let pars = Inductiveops.inductive_paramdecls pind in
     let parapp = Term.applist (Constr.mkIndU pind, params) in
-(*      let pars = Termops.extended_rel_vect 0 params in
-        Constr.mkApp (Constr.mkIndU pind, pars) in *)
       sigmaize env evd pars parapp in
   (* Generate the signature corresponding to the original term. *)
   (* Nota: we should normally lift the indices, but we supposed they did
@@ -444,8 +440,7 @@ let generalization (env : Environ.env) (ty : Term.types) (c : Term.constr)
   (* Build the equality between the two signatures. *)
   let eq = Equations_common.mkEq evd tysig left_valsig right_valsig in
   (* Build the goal under the arity and equality. *)
-  let goal =
-    Constr.mkApp (Constr.mkRel (oib.mind_nrealargs + 3), [| c |]) in
+  let goal = Constr.mkRel (oib.mind_nrealargs + 3) in
   (* Finally build the goal after generalization. *)
   let generalized_goal =
     Term.it_mkProd_or_LetIn goal ((Anonymous, None, eq) :: arity) in
@@ -453,10 +448,7 @@ let generalization (env : Environ.env) (ty : Term.types) (c : Term.constr)
   let gen_id = Namegen.next_ident_away_in_goal (Names.id_of_string "H") ids in
   let ctx =
     [(Names.Name.Name gen_id, None, generalized_goal); (Names.Name.Name pred_id, None, pred_ty)] in
-  let generalization_ty =
-    let goal = Constr.mkApp (Constr.mkRel 2, [| c |]) in
-      Term.it_mkProd_or_LetIn goal ctx
-  in
+  let generalization_ty = Term.it_mkProd_or_LetIn (Constr.mkRel 2) ctx in
 
   (* Build the corresponding proof. *)
   let proof = Term.applist (Constr.mkRel 1, indices) in
