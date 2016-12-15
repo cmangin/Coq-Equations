@@ -181,6 +181,7 @@ let term_of_tree status isevar env (i, delta, ty) ann tree =
           let new_ctx, ty = Term.decompose_prod_assum ty in
           let ty = Tacred.hnf_constr env !evd ty in
           let new_ctx = Namegen.name_context env new_ctx in
+          msg_info (str "[splitting]" ++ Printer.pr_rel_context env !evd (new_ctx @ ctx));
           let res = simpl_step (new_ctx @ ctx, ty) in
             ()
         ) branches_ty in

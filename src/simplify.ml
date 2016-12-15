@@ -311,17 +311,18 @@ let conv_fun = Evarconv.evar_conv_x Names.full_transparent_state
 
 (* Build an open term by substituting the second term for the hole in the
  * first term. *)
-let compose_term (evd : Evd.evar_map ref)
+let compose_term (env : Environ.env) (evd : Evd.evar_map ref)
   ((h1, c1) : open_term) ((h2, c2) : open_term) : open_term =
   match h1 with
   | Some ((ctx1, _), ev1) ->
-      (* Currently, [c2] is typed under the rel_context [ctx1]. We want
-         to assign it to the evar [ev1], which means that we need to transpose
-         it to the named_context of this evar. *)
-      (* FIXME Covering.named_of_rel_context does not use the same convention
-       * as Evarutil.push_rel_context_to_named_context. *)
-      let subst, _ = Covering.named_of_rel_context ctx1 in
-      let c2 = Vars.substl subst c2 in
+      let ev1_info = Evd.find !evd ev1 in
+      let ev1_ctx = Evd.evar_context ev1_info in
+      (* Keep only the context corresponding to [ctx1]. *)
+      let named_ctx1 = CList.firstn (List.length ctx1) ev1_ctx in
+      (* Now keep only the names and make terms out of them. *)
+      let subst_ctx1 = List.map (fun (id, _, _) -> Term.mkVar id) named_ctx1 in
+      (* Finally, substitute the rels in [c2] to get a valid term for [ev1]. *)
+      let c2 = Vars.substl subst_ctx1 c2 in
       evd := Evd.define ev1 c2 !evd;
       evd := Evarsolve.check_evar_instance !evd ev1 c2 conv_fun;
       h2, c1
@@ -341,7 +342,7 @@ let compose_fun (f : simplification_fun) (g : simplification_fun)
   match h1 with
   | Some (gl', _) ->
       let t2 = f env evd gl' in
-        compose_term evd t1 t2
+        compose_term env evd t1 t2
   | None -> t1
 
 
@@ -355,7 +356,7 @@ let while_fun (f : simplification_fun)
     | (Some (gl', _), _) as t1 ->
         begin try
           let t2 = aux env evd gl' in
-            compose_term evd t1 t2
+            compose_term env evd t1 t2
         with CannotSimplify _ -> t1 end
     | (None, _) as t1 -> t1
   in try

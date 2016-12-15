@@ -36,7 +36,7 @@ val strengthen :
   Context.rel_context -> int -> ?rels:Int.Set.t -> Term.constr ->
   Covering.context_map * Covering.context_map
 
-val compose_term : Evd.evar_map ref -> open_term -> open_term -> open_term
+val compose_term : Environ.env -> Evd.evar_map ref -> open_term -> open_term -> open_term
 val safe_fun : simplification_fun -> simplification_fun
 val compose_fun : simplification_fun -> simplification_fun -> simplification_fun
 
