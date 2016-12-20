@@ -187,7 +187,7 @@ and simplification_rule =
 and simplification_rules = (Loc.t * simplification_rule) list
 
 type goal = Context.rel_context * Term.types
-type open_term = (goal * Evd.evar) option * Term.constr
+type open_term = (goal * Constr.existential) option * Term.constr
 
 exception CannotSimplify of Pp.std_ppcmds
 
@@ -267,7 +267,7 @@ let build_term (env : Environ.env) (evd : Evd.evar_map ref) ((ctx, ty) : goal)
   let c = f tev in
   let env = Environ.push_rel_context ctx env in
   let _ = Typing.e_type_of env evd c in
-  let ev, _ = Term.destEvar tev in
+  let ev = Term.destEvar tev in
     Some ((ctx', ty'), ev), c
 
 
@@ -314,7 +314,7 @@ let conv_fun = Evarconv.evar_conv_x Names.full_transparent_state
 let compose_term (env : Environ.env) (evd : Evd.evar_map ref)
   ((h1, c1) : open_term) ((h2, c2) : open_term) : open_term =
   match h1 with
-  | Some ((ctx1, _), ev1) ->
+  | Some ((ctx1, _), (ev1, _)) ->
       let ev1_info = Evd.find !evd ev1 in
       let ev1_ctx = Evd.evar_context ev1_info in
       (* Keep only the context corresponding to [ctx1]. *)

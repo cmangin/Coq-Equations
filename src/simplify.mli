@@ -18,7 +18,7 @@ and simplification_rules = (Loc.t * simplification_rule) list
 type goal = Context.rel_context * Term.types
 (* The [goal] corresponds to the context and type of an evar representing a
  * hole in the term. *)
-type open_term = (goal * Evd.evar) option * Term.constr
+type open_term = (goal * Constr.existential) option * Term.constr
 
 exception CannotSimplify of Pp.std_ppcmds
 

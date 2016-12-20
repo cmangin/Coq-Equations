@@ -177,15 +177,44 @@ let term_of_tree status isevar env (i, delta, ty) ann tree =
          * the next step. *)
         let evd = ref evm in
         let simpl_step = Simplify.simplify [Loc.dummy_loc, Simplify.Infer_many] env evd in
-        let branches = Array.map (fun ty ->
+        let branches = Array.map2 (fun ty next ->
+          (* We get the context from the constructor arity. *)
           let new_ctx, ty = Term.decompose_prod_assum ty in
           let ty = Tacred.hnf_constr env !evd ty in
           let new_ctx = Namegen.name_context env new_ctx in
-          msg_info (str "[splitting]" ++ Printer.pr_rel_context env !evd (new_ctx @ ctx));
-          let res = simpl_step (new_ctx @ ctx, ty) in
-            ()
-        ) branches_ty in
-        failwith "Unimplemented!"
+          (* The overall context for the simplification is this context appended
+           * to the previous one. *)
+          let (hole, c) = simpl_step (new_ctx @ ctx, ty) in
+          (* Now we build a term to put in the match branch. *)
+          let c =
+            match hole, next with
+            (* Dead code: we should have found a proof of False. *)
+            | None, None -> c
+            (* Normal case: build recursively a subterm. *)
+            | Some ((next_ctx, _), ev), Some s ->
+                let evm, next_term, next_ty = aux !evd s in
+                (* Now we need to instantiate [ev] with the term [next_term]. *)
+                let conv_fun = Evarconv.evar_conv_x Names.full_transparent_state in
+                let next_env = Environ.push_rel_context next_ctx env in
+                (* [next_term] starts with lambdas, so we apply it to its context. *)
+                let args = Termops.extended_rel_vect 0 next_ctx in
+                let next_term = Reduction.beta_appvect next_term args in
+                evd := Evarsolve.evar_define conv_fun next_env evm None ev next_term;
+                c
+            (* This should not happen... *)
+            | _ -> failwith "Should not fail here, please report."
+          in
+          (* [c] is typed under [new_ctx @ ctx]. *)
+          (* We want it typed under [fresh_decl :: fresh_ctx @ ctx]. *)
+          Vars.lift (succ oib.mind_nrealargs) (Term.it_mkLambda_or_LetIn c new_ctx)
+        ) branches_ty sp in
+        let case_info = Inductiveops.make_case_info env (fst pind) Constr.RegularStyle in
+        let case_ty = Vars.lift (succ oib.mind_nrealargs) case_ty in
+        (* [case] is typed under [fresh_decl :: fresh_ctx @ ctx]. *)
+        let case = Constr.mkCase (case_info, case_ty, Constr.mkRel 1, branches) in
+        let after_gen = Term.it_mkLambda_or_LetIn case (fresh_decl :: fresh_ctx) in
+        let term = Constr.mkApp (gen_proof, [| after_gen |]) in
+        !evd, Term.it_mkLambda_or_LetIn term ctx, it_mkProd_or_subst ty ctx
       else
         let before, decl, after = split_tele (pred rel) ctx in
         let evm, branches = Array.fold_map (
