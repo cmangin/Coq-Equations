@@ -836,7 +836,9 @@ let expand_many rule env evd ((_, ty) : goal) : simplification_rules =
     let rec aux ty acc =
       let ty = Tacred.hnf_constr env !evd ty in
       let f, args = Term.decompose_appvect ty in
-      if check_inductive (Lazy.force SigmaRefs.sigma) f then aux args.(0) (rule :: acc)
+      if check_inductive (Lazy.force SigmaRefs.sigma) f then
+        let _, _, next_ty = Term.destLambda args.(1) in
+        aux next_ty (rule :: acc)
       else acc
     in aux ty [rule]
   with CannotSimplify _ -> [rule]

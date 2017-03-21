@@ -408,6 +408,118 @@ let build_generalization_ref = lazy (init_reference
 let build_generalization_constr evd =
   Evarutil.e_new_global evd (Lazy.force build_generalization_ref)
 
+(* Generalize a term while taking care of which variables we actually need
+ * to generalize, with the goal of eliminating the variable. This function
+ * requires a full rel_context, a rel to generalize, and a goal. It returns
+ * the type after generalization, the proof term that witnesses it, the 
+ * context of the generalization (i.e., the fresh variables added in the
+ * context), its length, and a
+ * list of [int option] keeping track of the indices that have been
+ * omitted from the generated fresh variables. All these indices are
+ * necessarily rels. *)
+let smart_generalization (env : Environ.env) (evd : Evd.evar_map ref)
+  (ctx : Context.rel_context) (rel : int) (goal : Term.types) :
+    Term.types * Term.constr * Context.rel_context * int * int option list =
+  let after, (_, _, rel_ty), before = Covering.split_context (pred rel) ctx in
+  let rel_ty = Vars.lift rel rel_ty in
+  let rel_t = Constr.mkRel rel in
+  (* For this, we need to analyze the variable and each of its indices,
+   * to generate fresh names only for those that need them. *)
+  (* For each index of the type, we omit it only if
+     1) It is a variable.
+     2) It did not appear before.
+     3) Its type does not depend on something that was not omitted before. *)
+  (* For this analysis, we will need the arity of the inductive type,
+   * as it is the reference for the criterion 3). *)
+  let pind, args = Inductive.find_inductive env rel_ty in
+  let mib, oib = Global.lookup_pinductive pind in
+  let params, indices = List.chop mib.mind_nparams args in
+  let indfam = Inductiveops.make_ind_family (pind, params) in
+  let arity_ctx, ind_decl = 
+    match Inductiveops.make_arity_signature env true indfam with
+    | ind_decl :: ctx -> ctx, ind_decl
+    | _ -> assert false
+  in
+  let rev_arity_ctx = List.rev arity_ctx in
+
+  (* As a first step, we compute a simple list of booleans, to know if
+     an index is omitted or not. *)
+  let rec compute_omitted prev_indices indices prev_ctx ctx omitted nb =
+    match indices, ctx with
+    | [], [] -> omitted, nb, prev_indices
+    | idx :: indices, decl :: ctx ->
+        let omit =
+          (* Variable. *)
+          if not (Term.isRel idx) then false
+          (* Linearity. *)
+          else if List.exists (Term.eq_constr idx) params then false
+          else if List.exists (Term.eq_constr idx) prev_indices then false
+          (* Dependency. *)
+          else
+            (* TODO *)
+            false 
+        in
+        compute_omitted (idx :: prev_indices) indices
+                        (decl :: prev_ctx) ctx
+                        ((if omit then Some (Term.destRel idx) else None) :: omitted)
+                        (if omit then nb else succ nb)
+    | _, _ -> assert false
+  in
+  let omitted, nb, rev_indices =
+    compute_omitted [] indices [] rev_arity_ctx [] 0 in
+  (* TODO Here we can add the variable itself to [omitted] and [rev_indices]. *)
+  (*
+  let omitted = Some rel :: omitted in
+  let rev_indices = rel_t :: rev_indices in
+  let arity_ctx = ind_decl :: arity_ctx in
+  *)
+  let omitted = None :: omitted in
+  let rev_indices = rel_t :: rev_indices in
+  let arity_ctx = ind_decl :: arity_ctx in
+  let nb = succ nb in
+  (* Shortcut in case we omit everything. *)
+  if Int.equal nb 0 then
+    goal, Constr.mkLambda (Anonymous, goal, Constr.mkRel 1), [], 0, omitted
+  else begin
+    (* Now we build a context that we can use with [telescope]. *)
+    let _, rev_sigctx, true_indices =
+      CList.fold_left3 (fun (k, ctx, true_indices) omit decl idx ->
+      if Option.has_some omit then
+        let idx = Vars.lift k idx in
+        (* Don't add a binder, but substitute [idx] for [Rel 1]. *)
+        (* Also, be careful that [idx] is typed under the "toplevel"
+         * context, while [ctx] is typed under the remaining [arity_ctx]. *)
+        pred k, Covering.subst_rel_context 1 idx ctx, true_indices
+      else
+        (* Add a binder to the context. *)
+        pred k, decl :: ctx, idx :: true_indices
+    ) (pred oib.mind_nrealargs, [], []) omitted arity_ctx rev_indices in
+    let sigctx = List.rev rev_sigctx in
+    let sigty, _, sigconstr = telescope evd sigctx in
+    (* At this point, sigconstr is a telescope ready to contain the
+     * indices of the old and fresh variables. *)
+    
+    (* Produce an equality type under the context [sigctx ++ ctx]. *)
+    (* [sigconstr] contains rels for each index that was not omitted. *)
+    let left_sig = Vars.substl (List.rev true_indices) sigconstr in
+    let lifted_left_sig = Vars.lift nb left_sig in
+    let lifted_sigty = Vars.lift nb sigty in
+    let eq = Equations_common.mkEq evd lifted_sigty lifted_left_sig sigconstr in
+
+    (* [gen_ty] is a valid type under [ctx] and is the goal after
+     * generalization. *)
+    let gen_ty = Term.it_mkProd_or_LetIn (Vars.lift (succ nb) goal)
+      ((Anonymous, None, eq) :: sigctx) in
+    (* [gen_proof] is the corresponding proof, also under [ctx]. *)
+    (* It has type [(gen_ty -> goal) -> goal]. *)
+    let true_indices = List.map (Vars.lift 1) true_indices in
+    let proof = Term.applist (Constr.mkRel 1, true_indices) in
+    let refl = Equations_common.mkRefl evd sigty left_sig in
+    let proof = Constr.mkApp (proof, [| Vars.lift 1 refl |]) in
+    let gen_proof = Constr.mkLambda (Anonymous, gen_ty, proof) in
+      gen_ty, gen_proof, sigctx, nb, omitted
+  end
+
 (* It is assumed that we want to build a term of type [@Generalization ty c],
  * and that [ty] and [c] are typed under the named_context of env. *)
 let generalization (env : Environ.env) (ty : Term.types) (c : Term.constr)
@@ -417,7 +529,7 @@ let generalization (env : Environ.env) (ty : Term.types) (c : Term.constr)
   (* Identifiants already in the context. *)
   let ids = Termops.ids_of_context env in
 
-  (* A predicate identifiant. *)
+  (* A predicate identifier. *)
   let pred_id = Namegen.next_ident_away_in_goal (Names.id_of_string "P") ids in
   (* A type for the predicate. *)
   let pred_ty = Evarutil.e_new_Type env evd in

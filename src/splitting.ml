@@ -121,61 +121,49 @@ let term_of_tree status isevar env (i, delta, ty) ann tree =
     | Split ((ctx, _, _), rel, ty, sp) -> 
       if !Equations_common.ocaml_splitting then
         (* Fetch the type of the variable that we want to eliminate. *)
-        let (_, _, rel_ty) = List.nth ctx (pred rel) in
+        let after, (_, _, rel_ty), before = Covering.split_context (pred rel) ctx in
         let rel_ty = Vars.lift rel rel_ty in
         let rel_t = Constr.mkRel rel in
         (* First, prepare a term corresponding to the generalization step. *)
-        (* Build the Generalization instance applied to this variable. *)
-        let gen_cls_info =
-          let cls = Lazy.force Equations_common.coq_generalization_class in
-          Typeclasses.class_info cls
-        in
-        (* Now we can try to get an instance. This should not fail. *)
-        (* TODO Still add a try/with just in case. *)
-        let evm, gen_inst =
-          let gen_cls_implem = gen_cls_info.Typeclasses.cl_impl in
-          let evm, gen_cls_t = Evarutil.new_global evm gen_cls_implem in
-          let gen_ty = Constr.mkApp (gen_cls_t, [| rel_ty; rel_t |]) in
-          let env = Environ.push_rel_context ctx env in
-            Typeclasses.resolve_one_typeclass env evm gen_ty
-        in
-        (* Now we can get the type of the generalization in order to
-         * build the next goal. *)
-        let evm, gen_ty, gen_proof =
-          let _, _, gen_ty = List.nth gen_cls_info.Typeclasses.cl_projs 0 in
-          let _, _, proof = List.nth gen_cls_info.Typeclasses.cl_projs 1 in
-          let gen_ty, proof =  Option.get gen_ty, Option.get proof in
-          let evm, gen_ty = Evarutil.new_global evm (Globnames.ConstRef gen_ty) in
-          let evm, proof = Evarutil.new_global evm (Globnames.ConstRef proof) in
-          let gen_ty = Constr.mkApp (gen_ty, [| rel_ty; rel_t; gen_inst; ty |]) in
-          let proof = Constr.mkApp (proof, [| rel_ty; rel_t; gen_inst; ty |]) in
-            evm, gen_ty, proof
-        in
-        let gen_ty = Tacred.hnf_constr env evm gen_ty in
-        (* [generalized_ty] is a valid type under context [ctx] and is the goal
-         * after generalization. *)
-        let generalized_ty =
-          match Term.decompose_prod_n 1 gen_ty with
-          | [_, ty], _ -> ty
-          | _ -> assert false
-        in
-        (* Next we build the match to eliminate the fresh variable. *)
-        (* Now we need some information on the number of indices of the inductive
-         * type of [rel]. *)
+        let evd = ref evm in
+        let gen_ty, gen_proof, gen_ctx, gen_nb, rev_omitted =
+          Sigma.smart_generalization env evd ctx rel ty in
+        (* Next step is to build the return type of the match. *)
+        (* For this, we first need the arity of the inductive family. *)
         let pind, args = Inductive.find_inductive env rel_ty in
         let mib, oib = Global.lookup_pinductive pind in
         let params, indices = List.chop mib.mind_nparams_rec args in
-        (* Build the context under which the fresh variable is declared. *)
-        let (_, _, fresh_ty) as fresh_decl, fresh_ctx, goal =
-          match Term.decompose_prod_n_assum (succ oib.mind_nrealargs) generalized_ty with
-          | decl :: rest, goal -> decl, rest, goal
-          | _ -> assert false
-        in
-        let case_ty = Term.it_mkLambda_or_LetIn goal (fresh_decl :: fresh_ctx) in
+        let indf = Inductiveops.make_ind_family (pind, params) in
+        (* TODO: check if we need "true" here. *)
+        let arity = Inductiveops.make_arity_signature env true indf in
+        (* Now we can start from the goal after generalization. *)
+        let _, goal = Term.decompose_prod_n_assum gen_nb gen_ty in
+
+        (* TODO The logic is completely different if we do not need to
+         * generalize the variable itself... *)
+        (* Specifically:
+         * - we do not introduce anything new, the only "new" variables are
+         *   the ones introduced by the match itself in the return clause;
+         * - we split on [rel_t], not on some [mkRel 1] which does not exist;
+         * - we need, somehow, to have an updated environment where everything
+         *   omitted in the telescope has been removed/replaced. *)
+
+        (* Replace the indices that were not omitted, wrap everythind under
+         * lambdas. *)
+        let case_ty, _ = List.fold_left2 (fun (goal, k) decl omit ->
+          match omit with
+          | None -> Term.mkLambda_or_LetIn decl goal, succ k
+          | Some n -> 
+              let goal = Vars.lift 1 goal in
+              let goal = Termops.replace_term (Constr.mkRel (n + gen_nb - k + 1))
+            (Constr.mkRel 1) goal in
+              Term.mkLambda_or_LetIn decl goal, k
+          ) (goal, 0) arity rev_omitted in
+        (* Finally, we can build the match with a few helpers. *)
         let branches_ty = Inductive.build_branches_type pind (mib, oib) params case_ty in
+
         (* Now that we know the type of each branch, we can use simplify to do
          * the next step. *)
-        let evd = ref evm in
         let simpl_step = Simplify.simplify [Loc.dummy_loc, Simplify.Infer_many] env evd in
         let branches = Array.map2 (fun ty next ->
           (* We get the context from the constructor arity. *)
@@ -205,14 +193,15 @@ let term_of_tree status isevar env (i, delta, ty) ann tree =
             | _ -> failwith "Should not fail here, please report."
           in
           (* [c] is typed under [new_ctx @ ctx]. *)
-          (* We want it typed under [fresh_decl :: fresh_ctx @ ctx]. *)
-          Vars.lift (succ oib.mind_nrealargs) (Term.it_mkLambda_or_LetIn c new_ctx)
+          (* We want it typed under [gen_ctx @ ctx], where [gen_ctx] is the
+           * context after generalization. *)
+          Vars.lift gen_nb (Term.it_mkLambda_or_LetIn c new_ctx)
         ) branches_ty sp in
         let case_info = Inductiveops.make_case_info env (fst pind) Constr.RegularStyle in
-        let case_ty = Vars.lift (succ oib.mind_nrealargs) case_ty in
-        (* [case] is typed under [fresh_decl :: fresh_ctx @ ctx]. *)
+        let case_ty = Vars.lift gen_nb case_ty in
+        (* [case] is typed under [gen_ctx @ ctx]. *)
         let case = Constr.mkCase (case_info, case_ty, Constr.mkRel 1, branches) in
-        let after_gen = Term.it_mkLambda_or_LetIn case (fresh_decl :: fresh_ctx) in
+        let after_gen = Term.it_mkLambda_or_LetIn case gen_ctx in
         let term = Constr.mkApp (gen_proof, [| after_gen |]) in
         !evd, Term.it_mkLambda_or_LetIn term ctx, it_mkProd_or_subst ty ctx
       else
