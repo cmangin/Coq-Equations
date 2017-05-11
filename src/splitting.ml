@@ -124,46 +124,15 @@ let term_of_tree status isevar env (i, delta, ty) ann tree =
         let after, (_, _, rel_ty), before = Covering.split_context (pred rel) ctx in
         let rel_ty = Vars.lift rel rel_ty in
         let rel_t = Constr.mkRel rel in
-        (* First, prepare a term corresponding to the generalization step. *)
+        (* Produce a case relevant to the elimination that we need. *)
         let evd = ref evm in
-        let gen_ty, gen_proof, gen_ctx, gen_nb, rev_omitted =
-          Sigma.smart_generalization env evd ctx rel ty in
-        (* Next step is to build the return type of the match. *)
-        (* For this, we first need the arity of the inductive family. *)
+        let case_ty, to_apply = Sigma.smart_case env evd ctx rel ty in
+        (* From this return type, we can deduce the type of each branch. *)
         let pind, args = Inductive.find_inductive env rel_ty in
         let mib, oib = Global.lookup_pinductive pind in
-        let params, indices = List.chop mib.mind_nparams_rec args in
-        let indf = Inductiveops.make_ind_family (pind, params) in
-        (* TODO: check if we need "true" here. *)
-        let arity = Inductiveops.make_arity_signature env true indf in
-        (* Now we can start from the goal after generalization. *)
-        let _, goal = Term.decompose_prod_n_assum gen_nb gen_ty in
-
-        (* TODO The logic is completely different if we do not need to
-         * generalize the variable itself... *)
-        (* Specifically:
-         * - we do not introduce anything new, the only "new" variables are
-         *   the ones introduced by the match itself in the return clause;
-         * - we split on [rel_t], not on some [mkRel 1] which does not exist;
-         * - we need, somehow, to have an updated environment where everything
-         *   omitted in the telescope has been removed/replaced. *)
-
-        (* Replace the indices that were not omitted, wrap everythind under
-         * lambdas. *)
-        let case_ty, _ = List.fold_left2 (fun (goal, k) decl omit ->
-          match omit with
-          | None -> Term.mkLambda_or_LetIn decl goal, succ k
-          | Some n -> 
-              let goal = Vars.lift 1 goal in
-              let goal = Termops.replace_term (Constr.mkRel (n + gen_nb - k + 1))
-            (Constr.mkRel 1) goal in
-              Term.mkLambda_or_LetIn decl goal, k
-          ) (goal, 0) arity rev_omitted in
-        (* Finally, we can build the match with a few helpers. *)
+        let params, indices = List.chop mib.mind_nparams args in
         let branches_ty = Inductive.build_branches_type pind (mib, oib) params case_ty in
-
-        (* Now that we know the type of each branch, we can use simplify to do
-         * the next step. *)
+        (* The next step is to use [simplify]. *)
         let simpl_step = Simplify.simplify [Loc.dummy_loc, Simplify.Infer_many] env evd in
         let branches = Array.map2 (fun ty next ->
           (* We get the context from the constructor arity. *)
@@ -172,6 +141,8 @@ let term_of_tree status isevar env (i, delta, ty) ann tree =
           let new_ctx = Namegen.name_context env new_ctx in
           (* The overall context for the simplification is this context appended
            * to the previous one. *)
+          (* TODO: should we do some manipulation of the context to remove the
+           * variables that were omitted? *)
           let (hole, c) = simpl_step (new_ctx @ ctx, ty) in
           (* Now we build a term to put in the match branch. *)
           let c =
@@ -192,18 +163,13 @@ let term_of_tree status isevar env (i, delta, ty) ann tree =
             (* This should not happen... *)
             | _ -> failwith "Should not fail here, please report."
           in
-          (* [c] is typed under [new_ctx @ ctx]. *)
-          (* We want it typed under [gen_ctx @ ctx], where [gen_ctx] is the
-           * context after generalization. *)
-          Vars.lift gen_nb (Term.it_mkLambda_or_LetIn c new_ctx)
+            Term.it_mkLambda_or_LetIn c new_ctx
         ) branches_ty sp in
         let case_info = Inductiveops.make_case_info env (fst pind) Constr.RegularStyle in
-        let case_ty = Vars.lift gen_nb case_ty in
-        (* [case] is typed under [gen_ctx @ ctx]. *)
-        let case = Constr.mkCase (case_info, case_ty, Constr.mkRel 1, branches) in
-        let after_gen = Term.it_mkLambda_or_LetIn case gen_ctx in
-        let term = Constr.mkApp (gen_proof, [| after_gen |]) in
-        !evd, Term.it_mkLambda_or_LetIn term ctx, it_mkProd_or_subst ty ctx
+        let case = Constr.mkCase (case_info, case_ty, rel_t, branches) in
+        (* We need to apply some argument to the case for it to be valid. *)
+        let term = Constr.mkApp (case, Array.of_list to_apply) in
+          !evd, Term.it_mkLambda_or_LetIn term ctx, it_mkProd_or_subst ty ctx
       else
         let before, decl, after = split_tele (pred rel) ctx in
         let evm, branches = Array.fold_map (
