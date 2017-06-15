@@ -22,11 +22,13 @@ type open_term = (goal * Constr.existential) option * Term.constr
 
 exception CannotSimplify of Pp.std_ppcmds
 
+(* TODO Move the context_map inside the open_term... *)
 type simplification_fun =
-  Environ.env -> Evd.evar_map ref -> goal -> open_term
+  Environ.env -> Evd.evar_map ref -> goal -> open_term * Covering.context_map
 
 (* Auxiliary functions. *)
 
+(* TODO Remove completely and merge into covering.ml
 (* Return a substitution and its inverse. *)
 (* For more flexibility, [rels] is a set of indices which are to be
  * moved before the variable. By default, this is everything already before
@@ -35,6 +37,7 @@ val strengthen :
   Environ.env -> Evd.evar_map ->
   Context.rel_context -> int -> ?rels:Int.Set.t -> Term.constr ->
   Covering.context_map * Covering.context_map
+*)
 
 val compose_term : Environ.env -> Evd.evar_map ref -> open_term -> open_term -> open_term
 val safe_fun : simplification_fun -> simplification_fun

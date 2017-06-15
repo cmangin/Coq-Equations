@@ -411,11 +411,18 @@ let build_generalization_constr evd =
 (* Produce parts of a case on a variable, while introducing cuts and
  * equalities when necessary.
  * This function requires a full rel_context, a rel to eliminate, and a goal.
- * It returns a return type for the case, and a list of contr that need to
- * be applied to the case for it to be valid. *)
+ * It returns:
+ *   - a context [ctx'];
+ *   - a return type valid under [ctx'];
+ *   - the type of the branches of the case;
+ *   - a number of cuts;
+ *   - a reverse substitution from [ctx] to [ctx'];
+ *   - a list of terms in [ctx] to apply to the case once it is built;
+ *   - a boolean about the need for simplification or not. *)
 let smart_case (env : Environ.env) (evd : Evd.evar_map ref)
   (ctx : Context.rel_context) (rel : int) (goal : Term.types) :
-    Term.types * Term.constr list =
+    Context.rel_context * Term.types * Term.types array * int *
+    Covering.context_map * Term.constr list * bool =
   let after, (_, _, rel_ty), before = Covering.split_context (pred rel) ctx in
   let rel_ty = Vars.lift rel rel_ty in
   let rel_t = Constr.mkRel rel in
@@ -423,13 +430,12 @@ let smart_case (env : Environ.env) (evd : Evd.evar_map ref)
   let pind, args = Inductive.find_inductive env rel_ty in
   let mib, oib = Global.lookup_pinductive pind in
   let params, indices = List.chop mib.mind_nparams args in
+  (* The variable itself will be treated for all purpose as one of its indices. *)
+  let indices = indices @ [rel_t] in
   let indfam = Inductiveops.make_ind_family (pind, params) in
-  let arity_ctx, ind_decl =
-    match Inductiveops.make_arity_signature env true indfam with
-    | ind_decl :: ctx -> ctx, ind_decl
-    | _ -> assert false
-  in
+  let arity_ctx = Inductiveops.make_arity_signature env true indfam in
   let rev_arity_ctx = List.rev arity_ctx in
+
   (* Firstly, we need to analyze each index to decide if we should introduce
    * an equality for it or not. *)
   (* For each index of the type, we _omit_ it if and only if
@@ -437,153 +443,215 @@ let smart_case (env : Environ.env) (evd : Evd.evar_map ref)
    *   2) It did not appear before.
    *   3) Its type does not depend on something that was not omitted before.
   *)
-  let rec compute_omitted prev_indices indices prev_ctx ctx omitted nb =
+
+  (* ===== FORWARD PASS ===== *)
+  let rec compute_omitted prev_indices indices prev_ctx ctx omitted candidate nb =
     match indices, ctx with
-    | [], [] -> omitted, nb, prev_indices
+    | [], [] -> omitted, nb, prev_indices, candidate
     | idx :: indices, decl :: ctx ->
-        let omit =
+        let omit, cand =
           (* Variable. *)
-          if not (Term.isRel idx) then false
+          if not (Term.isRel idx) then None, None
           (* Linearity. *)
-          else if List.exists (Term.eq_constr idx) params then false
-          else if List.exists (Term.eq_constr idx) prev_indices then false
+          else if List.exists (Termops.dependent idx) params then None, None
+          else if List.exists (Termops.dependent idx) prev_indices then None, None
           (* Dependency. *)
           else
+            let rel = Term.destRel idx in
             let _, _, decl_ty = decl in
             let deps = Termops.free_rels decl_ty in
+            let omit =
               Int.Set.fold (fun x b ->
                 b && try Option.has_some (List.nth omitted (x-1))
                 with Failure _ | Invalid_argument _ -> true) deps true
+            in (if omit then Some rel else None), Some rel
         in
         compute_omitted (idx :: prev_indices) indices
                         (decl :: prev_ctx) ctx
-                        ((if omit then Some (Term.destRel idx) else None) :: omitted)
-                        (if omit then nb else succ nb)
+                        (omit :: omitted)
+                        (cand :: candidate)
+                        (if Option.has_some omit then nb else succ nb)
     | _, _ -> assert false
   in
-  let omitted, nb, rev_indices =
-    compute_omitted [] indices [] rev_arity_ctx [] 0 in
-  (* Do we need to omit the variable itself? *)
-  let omit_variable =
-    let dep_var = CList.fold_left_i (fun i dep (_, b, t) -> dep ||
-        let is_dep t = not (Vars.noccurn (rel - i) t) in
-        Option.cata is_dep false b || is_dep t
-      ) 1 (not (Vars.noccurn rel goal)) after
-    in
-    if Int.equal nb 0 || not dep_var then
-      Some rel
-    else
-      None
-  in
-  let omitted = omit_variable :: omitted in
-  let rev_indices = rel_t :: rev_indices in
-  let return_ctx = ind_decl :: arity_ctx in
-  let nb = if Option.has_some omit_variable then nb else succ nb in
-  (* From this data, we can prepare a function that performs the substitution
-   * between the omitted variables and their corresponding variables in the
-   * context. This function takes a constr typed under the context
-   * [arity_ctx @ ctx] and returns a constr typed under the same
-   * context, where every variable in [omitted] has been replaced by its
-   * corresponding index. *)
-  let subst_omitted (c : constr) =
-    CList.fold_left_i (fun i c -> function
-      | Some x ->
-          (* [x] was computed under the context [ctx], we need to lift it. *)
-          Termops.replace_term (Constr.mkRel (x + oib.mind_nrealargs + 1))
-            (Constr.mkRel i) c
-      | None -> c
-    ) 1 c omitted
-  in
-  (* At this point, we are ready to produce an equality between telescopes,
-   * if needed. First, we can eliminate the trivial case where everything was
-   * omitted. *)
-  if Int.equal nb 0 then
-    let goal = Vars.lift (succ oib.mind_nrealargs) goal in
-    let goal = subst_omitted goal in
-    let case_ty = Termops.it_mkLambda_or_LetIn goal return_ctx in
-      case_ty, []
-  else
-    (* Otherwise, we need to build a context that we can use with [telescope].
-     * This context will be valid under [ctx]. *)
-    (* (Recall that a telescope is a reversed context. *)
-    let _, rev_sigctx, tele_lhs, tele_rhs =
-      CList.fold_left3 (fun (k, rev_sigctx, tele_lhs, tele_rhs) omit decl idx ->
-        match omit with
-        | Some x ->
-          (* Don't add a binder for this index, since it is omitted. *)
-          (* We need, however, to substitude [Rel 1] by the corresponding
-           * omitted rel for the telescope to be valid. *)
-          (* [x] is valid under [ctx], and [k] is the number of binders above
-           * the current declaration. *)
-          let rev_sigctx = Covering.subst_telescope (Constr.mkRel (x + k))
-            rev_sigctx in
-          pred k, rev_sigctx, tele_lhs, tele_rhs
-        | None ->
-          (* Add a binder to the telescope. *)
-          let rhs = Constr.mkRel (succ oib.mind_nrealargs - k) in
-          pred k, decl :: rev_sigctx, idx :: tele_lhs, rhs :: tele_rhs
-      ) (oib.mind_nrealargs, [], [], []) omitted return_ctx rev_indices
-    in
-    let sigctx = List.rev rev_sigctx in
-    let sigty, _, sigconstr = telescope evd sigctx in
-    (* [sigconstr] is a telescope ready to contain the indices that we need. *)
-    (* We will produce an equality between two telescopes, one with indices
-     * from the new [arity_ctx], and one with indices from the variable. *)
-    let left_sig = Vars.substl (List.rev tele_lhs) sigconstr in
-    (* [left_sig] is valid under [ctx] as was [true_indices], let's lift it. *)
-    let lifted_left_sig = Vars.lift (succ oib.mind_nrealargs) left_sig in
-    (* The same holds for [sigty]. *)
-    let lifted_sigty = Vars.lift (succ oib.mind_nrealargs) sigty in
-    (* For the right-hand-side, we have to replace [Rel 1; ..; Rel nb] by
-     * some subset of [Rel 1; ..; Rel (succ oib.mind_nparams)]. *)
-    let lifted_sigconstr = Vars.liftn (succ oib.mind_nrealargs) (succ nb) sigconstr in
-    let right_sig = Vars.substl (List.rev tele_rhs) lifted_sigconstr in
-    let eq = Equations_common.mkEq evd lifted_sigty lifted_left_sig right_sig in
-    (* At this point, [eq] is an equality valid under [arity_ctx @ ctx], with
-     * a right-hand-side which is only rels, and left-hand-side which contains
-     * the indices of the variable being eliminated, lifted accordingly so
-     * that none of them refer to [arity_ctx]. *)
-    let goal = Vars.lift (oib.mind_nrealargs + 2) goal in
-    let goal = Term.mkProd (Anonymous, eq, goal) in
-    (* We can start filling the terms we will need to apply to the case. *)
-    let to_apply = [Equations_common.mkRefl evd sigty left_sig] in
-    (* Now we need to care about cuts if we need them. *)
-    (* For every variable in the context, we check if these conditions hold:
-     *   i) Its type depends on a variable that was omitted or cut.
-     *   ii) It is not omitted itself.
-     * If that is the case, we need to introduce a cut. *)
-    (* To help a little bit, we compute a set of omitted rels. *)
-    let omitted_rels = List.fold_left (fun omitted_rels omit ->
-      Option.fold_right Int.Set.add omit omitted_rels) Int.Set.empty omitted in
-    let lenctx = List.length ctx in
-    let cut_ctx, _, _ = List.fold_right_i (fun k (name, body, decl_ty)
-      (cut_ctx, cut_rels, managed) ->
-      let rel = lenctx - k in
-      let cut =
-        if Int.Set.mem rel omitted_rels then false
-        else
-          let rels = Termops.free_rels decl_ty in
-            Int.Set.exists (fun i -> let rel' = i + rel in
-              Int.Set.mem rel' omitted_rels || Int.Set.mem rel' cut_rels) rels
-      in
-      if not cut then (cut_ctx, cut_rels, false :: managed)
-      else
-        (* We want to insert a cut for this variable. *)
-        let decl_ty = Vars.lift (rel + oib.mind_nrealargs + 1) decl_ty in
-        let decl_ty, _ = List.fold_left_i (fun i (decl_ty, j) managed ->
-          if managed then
-            let decl_ty = Vars.lif 1 decl_ty in
-              Termops.replace_term (Constr.mkRel (rel + i))
-        ) 0 (decl_ty, 1)
-        assert false
-    ) 0 ctx ([], Int.Set.empty, []) in
+  (* [rev_indices] also include the variable being eliminated at its head. *)
+  let omitted, nb, rev_indices, candidate =
+    compute_omitted [] indices [] rev_arity_ctx [] [] 0 in
+  
+  (* Now we do a pass backwards to check if we can omit more things. *)
+  (* More precisely, for any variable in rev_indices, we can omit it if
+   * nothing in the remaining context that was not omitted depends on it. *)
+  (* TODO The algorithm is very inefficient for now. *)
 
-    (* All the cuts have been inserted, and [to_apply] has been updated
-     * accordingly, we can now substitute the omitted variables for their
-     * correct rel, and wrap everything under lambdas. *)
-    let goal = subst_omitted goal in
-    let case_ty = Termops.it_mkLambda_or_LetIn goal return_ctx in
-      case_ty, to_apply
+  (* ===== BACKWARD PASS ===== *)
+  let rec compute_omitted_bis rev_omitted omitted candidate rev_indices nb =
+    match omitted, candidate, rev_indices with
+    | [], [], [] -> rev_omitted, nb
+    | Some rel :: omitted, _ :: candidate, idx :: rev_indices ->
+        compute_omitted_bis (Some rel :: rev_omitted) omitted candidate
+          rev_indices nb
+    | _ :: omitted, None :: candidate, idx :: rev_indices ->
+        compute_omitted_bis (None :: rev_omitted) omitted candidate
+          rev_indices nb
+    | None :: omitted, Some rel :: candidate, idx :: rev_indices ->
+        (* We know that [idx] is [Rel rel] and a candidate for omission. *)
+        (* TODO Very inefficient... *)
+        let after = (Anonymous, None, goal) :: CList.firstn (pred rel) ctx in
+        let omit = CList.for_all_i (fun i decl ->
+          let _, _, decl_ty = decl in
+          (* No dependency. *)
+          not (Termops.dependent (Constr.mkRel (rel - i)) decl_ty) ||
+          (* Already omitted. *)
+          List.mem (Some i) rev_omitted) 0 after in
+        if omit then
+          compute_omitted_bis (Some rel :: rev_omitted) omitted candidate
+            rev_indices (pred nb)
+        else
+          compute_omitted_bis (None :: rev_omitted) omitted candidate
+            rev_indices nb
+    | _, _, _ -> assert false
+  in
+  (* FIXME If we decomment this to be greedier, then we cannot compute a nice
+   * context_map, since we really want to forget about what was omitted in
+   * this second pass. A clear is not a proper substitution. *)
+(*  let rev_omitted, nb = compute_omitted_bis [] omitted candidate rev_indices nb in
+  let omitted = List.rev rev_omitted in*)
+
+  (* At this point, we have [omitted] which is a list of either [Some rel] when
+   * the corresponding index is omitted, [None] otherwise, and [nb] is the number
+   * of [None] in this list. *)
+  (* Now we consider the context [arity_ctx @ ctx], which is the context of
+   * the return type. We will build a context substitution from this context
+   * to a new one with shape [cuts @ arity_ctx @ ctx'] where [ctx'] is some
+   * sub-context of [ctx], [cuts] is a number of declarations for which we
+   * need to introduce cutx, and [arity_ctx] has been left untouched. *)
+
+  (* ===== STRENGTHENING ===== *)
+  let subst = Covering.id_subst (arity_ctx @ ctx) in
+  let rev_subst = Covering.id_subst (arity_ctx @ ctx) in
+  let subst, rev_subst = List.fold_left (
+    fun ((ctx, _, _) as subst, rev_subst) -> function
+    | None -> subst, rev_subst
+    | Some rel ->
+        let fresh_rel = Covering.mapping_constr subst (Constr.mkRel 1) in
+        let target_rel = Constr.mkRel (rel + oib.mind_nrealargs + 1) in
+        let target_rel = Covering.mapping_constr subst target_rel in
+        let target_rel = Term.destRel target_rel in
+        let lsubst, lrev_subst = Covering.new_strengthen env !evd ctx target_rel fresh_rel in
+        let res1 = Covering.compose_subst ~sigma:!evd lsubst subst in
+        let res2 = Covering.compose_subst ~sigma:!evd rev_subst lrev_subst in
+          res1, res2
+  ) (subst, rev_subst) omitted in
+  let nb_cuts_omit = pred (Term.destRel
+   (Covering.mapping_constr subst (Constr.mkRel 1))) in
+  (* [ctx'] is the context under which we will build the case in a first step. *)
+  (* This is [ctx] where everything omitted and cut is removed. *)
+  let ctx' = List.skipn (nb_cuts_omit + oib.mind_nrealargs + 1) (pi1 subst) in
+  let rev_subst' = List.skipn (nb_cuts_omit + oib.mind_nrealargs + 1) (pi2 subst) in
+  let rev_subst' = Covering.lift_pats (-(oib.mind_nrealargs+1)) rev_subst' in
+  let rev_subst_without_cuts = Covering.mk_ctx_map !evd ctx rev_subst' ctx' in
+  (* Now we will work under a context with [ctx'] as a prefix, so we will be
+   * able to go back to [ctx] easily. *)
+
+  (* ===== SUBSTITUTION ===== *)
+  let subst = CList.fold_right_i (
+    fun i omit ((ctx, pats, _) as subst)->
+    match omit with
+    | None -> subst
+    | Some rel ->
+        let orig = oib.mind_nrealargs + 1 - i in
+        let fresh_rel = Covering.specialize pats (Covering.PRel orig) in
+        let target_rel = Constr.mkRel (rel + oib.mind_nrealargs + 1) in
+        let target_rel = Covering.mapping_constr subst target_rel in
+        let target_rel = Term.destRel target_rel in
+        (* We know that this call will fall in the simple case
+         * of [single_subst], because we already strengthened everything. *)
+        let lsubst = Covering.single_subst env !evd target_rel fresh_rel ctx in
+          Covering.compose_subst ~sigma:!evd lsubst subst
+  ) 0 omitted subst in
+  let nb_cuts = pred (Term.destRel
+   (Covering.mapping_constr subst (Constr.mkRel 1))) in
+  (* Also useful: a substitution from [ctx] to the context with cuts. *)
+  let subst_to_cuts =
+    let lift_subst = Covering.mk_ctx_map !evd (arity_ctx @ ctx)
+    (Covering.lift_pats (oib.mind_nrealargs + 1) (pi2 (Covering.id_subst ctx)))
+    ctx in
+      Covering.compose_subst ~sigma:!evd subst lift_subst
+  in
+
+  (* Finally, we can work on producing a return type. *)
+  let goal = Covering.mapping_constr subst_to_cuts goal in
+  
+  (* ===== CUTS ===== *)
+  let cuts_ctx, remaining = List.chop nb_cuts (pi1 subst) in
+  let fresh_ctx = List.firstn (oib.mind_nrealargs + 1) remaining in
+  let revert_cut x =
+    let rec revert_cut i = function
+      | [] -> failwith "Could not revert a cut, please report."
+      | Covering.PRel y :: _ when Int.equal x y -> Constr.mkRel i
+      | _ :: l -> revert_cut (succ i) l
+    in revert_cut (- oib.mind_nrealargs) (pi2 subst)
+  in
+  let rev_cut_vars = CList.map revert_cut (CList.init nb_cuts (fun i -> succ i)) in
+  let cut_vars = List.rev rev_cut_vars in
+  
+  (* ===== EQUALITY OF TELESCOPES ===== *)
+  let goal, to_apply, simpl =
+    if Int.equal nb 0 then goal, [], false
+    else
+      let arity_ctx' = Covering.specialize_rel_context (pi2 subst_to_cuts) arity_ctx in
+      let rev_indices' = List.map (Covering.mapping_constr subst_to_cuts) rev_indices in
+      let _, rev_sigctx, tele_lhs, tele_rhs =
+        CList.fold_left3 (
+          fun (k, rev_sigctx, tele_lhs, tele_rhs) decl idx -> function
+          | Some _ -> (* Don't add a binder, but substitute *)
+              let fresh = Constr.mkRel (nb_cuts + oib.mind_nrealargs + 1) in
+              let rev_sigctx = Covering.subst_telescope fresh rev_sigctx in
+              succ k, rev_sigctx, tele_lhs, tele_rhs
+          | None -> (* Add a binder to the telescope. *)
+              let rhs = Constr.mkRel k in
+              succ k, decl :: rev_sigctx, idx :: tele_lhs, rhs :: tele_rhs
+
+        ) (succ nb_cuts, [], [], []) arity_ctx' rev_indices' omitted
+      in
+      let sigctx = List.rev rev_sigctx in
+      let sigty, _, sigconstr = telescope evd sigctx in
+      
+      (* Build a goal with an equality of telescopes at the front. *)
+      let left_sig = Vars.substl (List.rev tele_lhs) sigconstr in
+      let right_sig = Vars.substl (List.rev tele_rhs) sigconstr in
+      let eq = Equations_common.mkEq evd sigty left_sig right_sig in
+      let goal = Vars.lift 1 goal in
+      let goal = Term.mkProd (Anonymous, eq, goal) in
+
+      (* Build a reflexivity proof to apply to the case. *)
+      let tr_out t =
+        let t = Termops.it_mkLambda_or_LetIn t cuts_ctx in
+        let t = Termops.it_mkLambda_or_LetIn t fresh_ctx in
+        let t = Covering.mapping_constr rev_subst_without_cuts t in
+          Reductionops.beta_applist (t, indices @ cut_vars)
+      in
+        goal, [Equations_common.mkRefl evd (tr_out sigty) (tr_out left_sig)], true
+  in
+
+  (* ===== RESOURCES FOR EACH BRANCH ===== *)
+  let params = List.map (Covering.mapping_constr subst_to_cuts) params in
+  (* If something is wrong here, it means that one of the parameters was
+   * omitted or cut, which should be wrong... *)
+  let params = List.map (Vars.lift (-(nb_cuts + oib.mind_nrealargs + 1))) params in
+  let branches_ty = Inductive.build_branches_type pind (mib, oib) params goal in
+  
+  (* ===== RESULT ===== *)
+  let to_apply = cut_vars @ to_apply in
+  let goal = Termops.it_mkProd_or_LetIn goal cuts_ctx in
+  let goal = Term.it_mkLambda_or_LetIn goal fresh_ctx in
+   (* We have everything we need:
+   *  - a context [ctx'];
+   *  - a return type [goal] valid under [ctx'];
+   *  - the type of the branches of the case;
+   *  - a number of cuts [nb_cuts];
+   *  - a reverse substitution [rev_subst_without_cuts] from [ctx] to [ctx'];
+   *  - some terms in [ctx] to apply to the case once it is built. *)
+      (ctx', goal, branches_ty, nb_cuts, rev_subst_without_cuts, to_apply, simpl)
 
 (* It is assumed that we want to build a term of type [@Generalization ty c],
  * and that [ty] and [c] are typed under the named_context of env. *)

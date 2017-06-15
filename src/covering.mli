@@ -55,12 +55,13 @@ val ppcontext : rel_context -> unit
 val pr_context_map : env -> context_map -> Pp.std_ppcmds
 val ppcontext_map : context_map -> unit
 val typecheck_map :
-  Evd.evar_map -> context_map -> unit
+  Environ.env -> Evd.evar_map -> context_map -> unit
 val check_ctx_map :
-  Evd.evar_map -> context_map -> context_map
+  ?env:Environ.env -> Evd.evar_map -> context_map -> context_map
 
 (** Smart constructor (doing runtime checks) *)
 val mk_ctx_map :
+  ?env:Environ.env ->
   Evd.evar_map ->
   rel_context ->
   pat list ->
@@ -139,6 +140,7 @@ val ppsplit : splitting -> unit
 
 (** Covering computation *)
 
+val context_map_of_splitting : splitting -> context_map
 val specialize_mapping_constr : context_map -> constr -> constr
 val rels_of_tele : 'a list -> constr list
 val patvars_of_tele : 'a list -> pat list
@@ -178,6 +180,16 @@ val strengthen :
   Int.Set.elt ->
   constr ->
   context_map * (int * int) list
+
+(* Return a substitution and its inverse. *)
+(* For more flexibility, [rels] is a set of indices which are to be
+ * moved before the variable. By default, this is everything already before
+ * the variable. *)
+val new_strengthen :
+  Environ.env -> Evd.evar_map ->
+  Context.rel_context -> int -> ?rels:Int.Set.t -> Term.constr ->
+  context_map * context_map
+
 val id_subst : 'a list -> 'a list * pat list * 'a list
 val eq_context_nolet :
   env ->
@@ -188,6 +200,7 @@ val check_eq_context_nolet :
   context_map ->
   context_map -> unit
 val compose_subst :
+  ?env:Environ.env ->
   ?sigma:Evd.evar_map ->
   context_map ->
   context_map ->

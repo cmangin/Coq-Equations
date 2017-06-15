@@ -118,32 +118,28 @@ let term_of_tree status isevar env (i, delta, ty) ann tree =
 	  Proofview.return pv', 
 	  it_mkLambda_or_LetIn (subst_vars substc c) ctx, it_mkProd_or_LetIn ty ctx
 	      
-    | Split ((ctx, _, _), rel, ty, sp) -> 
+    | Split ((ctx, _, _) as subst, rel, ty, sp) -> 
       if !Equations_common.ocaml_splitting then
-        (* Fetch the type of the variable that we want to eliminate. *)
-        let after, (_, _, rel_ty), before = Covering.split_context (pred rel) ctx in
-        let rel_ty = Vars.lift rel rel_ty in
-        let rel_t = Constr.mkRel rel in
-        (* Produce a case relevant to the elimination that we need. *)
+        (* Produce parts of a case that will be relevant. *)
         let evd = ref evm in
-        let case_ty, to_apply = Sigma.smart_case env evd ctx rel ty in
-        (* From this return type, we can deduce the type of each branch. *)
-        let pind, args = Inductive.find_inductive env rel_ty in
-        let mib, oib = Global.lookup_pinductive pind in
-        let params, indices = List.chop mib.mind_nparams args in
-        let branches_ty = Inductive.build_branches_type pind (mib, oib) params case_ty in
+        let ctx', case_ty, branches_ty, nb_cuts, rev_subst, to_apply, simpl =
+          Sigma.smart_case env evd ctx rel ty in
+
         (* The next step is to use [simplify]. *)
-        let simpl_step = Simplify.simplify [Loc.dummy_loc, Simplify.Infer_many] env evd in
+        let simpl_step = if simpl then
+          Simplify.simplify [Loc.dummy_loc, Simplify.Infer_many] env evd
+          else Simplify.identity env evd
+        in
         let branches = Array.map2 (fun ty next ->
           (* We get the context from the constructor arity. *)
           let new_ctx, ty = Term.decompose_prod_assum ty in
           let ty = Tacred.hnf_constr env !evd ty in
           let new_ctx = Namegen.name_context env new_ctx in
-          (* The overall context for the simplification is this context appended
-           * to the previous one. *)
-          (* TODO: should we do some manipulation of the context to remove the
-           * variables that were omitted? *)
-          let (hole, c) = simpl_step (new_ctx @ ctx, ty) in
+          (* Remove the cuts and append them to the context. *)
+          let cut_ctx, ty = Term.decompose_prod_n_assum nb_cuts ty in
+
+          let ((hole, c), lsubst) = simpl_step (cut_ctx @ new_ctx @ ctx', ty) in
+          let subst = Covering.compose_subst ~sigma:!evd lsubst subst in
           (* Now we build a term to put in the match branch. *)
           let c =
             match hole, next with
@@ -158,18 +154,35 @@ let term_of_tree status isevar env (i, delta, ty) ann tree =
                 (* [next_term] starts with lambdas, so we apply it to its context. *)
                 let args = Termops.extended_rel_vect 0 next_ctx in
                 let next_term = Reduction.beta_appvect next_term args in
+                (* Finally, we might need to permute some rels... *)
+                let next_subst = Covering.context_map_of_splitting s in
+                ignore (subst; next_subst);
                 evd := Evarsolve.evar_define conv_fun next_env evm None ev next_term;
                 c
             (* This should not happen... *)
             | _ -> failwith "Should not fail here, please report."
           in
-            Term.it_mkLambda_or_LetIn c new_ctx
+            Term.it_mkLambda_or_LetIn c (cut_ctx @ new_ctx)
         ) branches_ty sp in
+
+        (* Get back to the original context. *)
+        let case_ty = Covering.mapping_constr rev_subst case_ty in
+        let branches = Array.map (Covering.mapping_constr rev_subst) branches in
+
+        (* Fetch the type of the variable that we want to eliminate. *)
+        let after, (_, _, rel_ty), before = Covering.split_context (pred rel) ctx in
+        let rel_ty = Vars.lift rel rel_ty in
+        let rel_t = Constr.mkRel rel in
+        let pind, _ = Inductive.find_inductive env rel_ty in
+
+        (* Build the case. *)
         let case_info = Inductiveops.make_case_info env (fst pind) Constr.RegularStyle in
         let case = Constr.mkCase (case_info, case_ty, rel_t, branches) in
-        (* We need to apply some argument to the case for it to be valid. *)
         let term = Constr.mkApp (case, Array.of_list to_apply) in
-          !evd, Term.it_mkLambda_or_LetIn term ctx, it_mkProd_or_subst ty ctx
+        let term = Term.it_mkLambda_or_LetIn term ctx in
+        let typ = it_mkProd_or_subst ty ctx in
+        Typing.check env evd term typ;
+          !evd, term, typ
       else
         let before, decl, after = split_tele (pred rel) ctx in
         let evm, branches = Array.fold_map (

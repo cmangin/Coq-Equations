@@ -188,10 +188,10 @@ let ppcontext_map context_map = pp (pr_context_map (Global.env ()) context_map)
 
 (** Debugging functions *)
 
-let typecheck_map evars (ctx, subst, ctx') =
-  typecheck_rel_context evars ctx;
-  typecheck_rel_context evars ctx';
-  let env = push_rel_context ctx (Global.env ()) in
+let typecheck_map env evars (ctx, subst, ctx') =
+  typecheck_rel_context env evars ctx;
+  typecheck_rel_context env evars ctx';
+  let env = push_rel_context ctx env in
   let _ = 
     List.fold_right2 
       (fun (na, b, t) p subst ->
@@ -201,26 +201,26 @@ let typecheck_map evars (ctx, subst, ctx') =
       ctx' subst []
   in ()
 
-let check_ctx_map evars map =
+let check_ctx_map ?(env = Global.env ()) evars map =
   if debug then
-    try typecheck_map evars map; map
+    try typecheck_map env evars map; map
     with Type_errors.TypeError (env, e) ->
       errorlabstrm "equations"
-	(str"Type error while building context map: " ++ pr_context_map (Global.env ()) map ++
+	(str"Type error while building context map: " ++ pr_context_map env map ++
 	   spc () ++ Himsg.explain_type_error env evars e)
     | Invalid_argument s ->
       errorlabstrm "equations"
-	(str"Type error while building context map: " ++ pr_context_map (Global.env ()) map ++
+	(str"Type error while building context map: " ++ pr_context_map env map ++
 	   spc () ++ str"Invalid_argument: " ++ str s)
     | e when is_anomaly e ->
       errorlabstrm "equations"
-	(str"Type error while building context map: " ++ pr_context_map (Global.env ()) map ++
+	(str"Type error while building context map: " ++ pr_context_map env map ++
 	   spc () ++ str"Anomaly: " ++ Errors.print e)
 
   else map
     
-let mk_ctx_map evars ctx subst ctx' =
-  let map = (ctx, subst, ctx') in check_ctx_map evars map
+let mk_ctx_map ?(env = Global.env ()) evars ctx subst ctx' =
+  let map = (ctx, subst, ctx') in check_ctx_map ~env evars map
 
 let rec map_patterns f ps =
   List.map (function
@@ -352,6 +352,14 @@ let lift_pats n p = lift_patns n 0 p
 type unification_result = 
   (context_map * int * constr * pat) option
 
+let rec context_map_of_splitting : splitting -> context_map = function
+  | Compute (subst, _, _) -> subst
+  | Split (subst, _, _, _) -> subst
+  | Valid (subst, _, _, _, _, _) -> subst
+  | Mapping (subst, _) -> subst
+  | RecValid (_, s) -> context_map_of_splitting s
+  | Refined (subst, _, _) -> subst
+
 let specialize_mapping_constr (m : context_map) c = 
   specialize_constr (pi2 m) c
     
@@ -468,6 +476,70 @@ let strengthen ?(full=true) ?(abstract=false) env evd (ctx : rel_context) x (t :
   in
     (ctx', subst, ctx), reorder
 
+(* TODO Merge both strengthening functions. Bottom one might be better. *)
+(* Return a substitution (and its inverse) which is just a permutation
+ * of the variables in the context which is well-typed, and such that
+ * all variables in [t] (and their own dependencies) are now declared
+ * before [x] in the context. *)
+let new_strengthen (env : Environ.env) (evd : Evd.evar_map) (ctx : Context.rel_context)
+  (x : int) ?(rels : Int.Set.t = rels_above ctx x) (t : Term.constr) :
+    context_map * context_map =
+  let rels = Int.Set.union rels (dependencies_of_term env evd ctx t x) in
+  let maybe_reduce k t =
+    if Int.Set.mem k (Termops.free_rels t) then
+      Reductionops.nf_betadeltaiota env evd t
+    else t
+  in
+  (* We may have to normalize some declarations in the context if they
+   * mention [x] syntactically when they shouldn't. *)
+  let ctx = CList.map_i (fun k decl ->
+    if Int.Set.mem k rels && k < x then
+      Context.map_rel_declaration (maybe_reduce (x - k)) decl
+    else decl) 1 ctx in
+  (* Now we want to put everything in [rels] as the oldest part of the context,
+   * and everything else after. The invariant is that the context
+   * [subst (rev (before @ after)) @ ctx] is well-typed. *)
+  (* We also create along what we need to build the actual substitution. *)
+  let len_ctx = Context.rel_context_length ctx in
+  let lifting = len_ctx - Int.Set.cardinal rels in
+  let rev_subst = Array.make len_ctx (PRel 0) in
+  let rec aux k before after n subst = function
+  | decl :: ctx ->
+      if Int.Set.mem k rels then
+        let subst = PRel (k + lifting - n + 1) :: subst in
+        rev_subst.(k + lifting - n) <- PRel k;
+        (* We lift the declaration not to be well-typed in the new context,
+         * but so that it reflects in a raw way its movement in the context.
+         * This allows to apply a simple substitution afterwards, instead
+         * of going through the whole context at each step. *)
+        let decl = Context.map_rel_declaration (Vars.lift (n - lifting - 1)) decl in
+        aux (succ k) (decl :: before) after n subst ctx
+      else
+        let subst = PRel n :: subst in
+        rev_subst.(n - 1) <- PRel k;
+        let decl = Context.map_rel_declaration (Vars.lift (k - n)) decl in
+        aux (succ k) before (decl :: after) (succ n) subst ctx
+  | [] -> CList.rev (before @ after), CList.rev subst
+  in
+  (* Now [subst] is a list of indices which represents the substitution
+   * that we must apply. *)
+  (* Right now, [ctx'] is an ill-typed rel_context, we need to apply [subst]. *)
+  let (ctx', subst) = aux 1 [] [] 1 [] ctx in
+  let rev_subst = Array.to_list rev_subst in
+  (* Fix the context [ctx'] by using [subst]. *)
+  (* We lift each declaration to make it appear as if it was under the
+   * whole context, which allows then to apply the substitution, and lift
+   * it back to its place. *)
+  let do_subst k c = Vars.lift (-k)
+    (specialize_constr subst (Vars.lift k c)) in
+  let ctx' = CList.map_i (fun k decl ->
+    Context.map_rel_declaration (do_subst k) decl) 1 ctx' in
+  (* Now we have everything need to build the two substitutions. *)
+  let s = mk_ctx_map evd ctx' subst ctx in
+  let rev_s = mk_ctx_map evd ctx rev_subst ctx' in
+    s, rev_s
+
+
 let id_pats g = rev (patvars_of_tele g)
 let id_subst g = (g, id_pats g, g)
 	
@@ -487,9 +559,9 @@ let check_eq_context_nolet env sigma (_, _, g as snd) (d, _, _ as fst) =
     (str "Contexts do not agree for composition: "
        ++ pr_context_map env snd ++ str " and " ++ pr_context_map env fst)
 
-let compose_subst ?(sigma=Evd.empty) ((g',p',d') as snd) ((g,p,d) as fst) =
-  if debug then check_eq_context_nolet (Global.env ()) sigma snd fst;
-  mk_ctx_map sigma g' (specialize_pats p' p) d
+let compose_subst ?(env = Global.env()) ?(sigma=Evd.empty) ((g',p',d') as snd) ((g,p,d) as fst) =
+  if debug then check_eq_context_nolet env sigma snd fst;
+  mk_ctx_map ~env sigma g' (specialize_pats p' p) d
 (*     (g', (specialize_pats p' p), d) *)
 
 let push_mapping_context (n, b, t as decl) (g,p,d) =
