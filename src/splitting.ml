@@ -122,7 +122,7 @@ let term_of_tree status isevar env (i, delta, ty) ann tree =
       if !Equations_common.ocaml_splitting then
         (* Produce parts of a case that will be relevant. *)
         let evd = ref evm in
-        let ctx', case_ty, branches_ty, nb_cuts, rev_subst, to_apply, simpl =
+        let ctx', case_ty, branches_ty, branches_subst, nb_cuts, rev_subst, to_apply, simpl =
           Sigma.smart_case env evd ctx rel ty in
 
         (* The next step is to use [simplify]. *)
@@ -130,15 +130,24 @@ let term_of_tree status isevar env (i, delta, ty) ann tree =
           Simplify.simplify [Loc.dummy_loc, Simplify.Infer_many] env evd
           else Simplify.identity env evd
         in
-        let branches = Array.map2 (fun ty next ->
+        let branches = Array.map3 (fun ty csubst next ->
           (* We get the context from the constructor arity. *)
           let new_ctx, ty = Term.decompose_prod_assum ty in
-          let ty = Tacred.hnf_constr env !evd ty in
           let new_ctx = Namegen.name_context env new_ctx in
+          let ty =
+            if simpl || nb_cuts > 0 then
+              let env = Environ.push_rel_context (new_ctx @ ctx') env in
+              Tacred.hnf_constr env !evd ty
+            else ty
+          in
           (* Remove the cuts and append them to the context. *)
           let cut_ctx, ty = Term.decompose_prod_n_assum nb_cuts ty in
 
+          (* TODO This context should be the same as (pi1 csubst). We could
+           * either optimize (but names in [csubst] are worse) or just insert
+           * a sanity-check. *)
           let ((hole, c), lsubst) = simpl_step (cut_ctx @ new_ctx @ ctx', ty) in
+          let subst = Covering.compose_subst ~sigma:!evd csubst subst in
           let subst = Covering.compose_subst ~sigma:!evd lsubst subst in
           (* Now we build a term to put in the match branch. *)
           let c =
@@ -154,16 +163,17 @@ let term_of_tree status isevar env (i, delta, ty) ann tree =
                 (* [next_term] starts with lambdas, so we apply it to its context. *)
                 let args = Termops.extended_rel_vect 0 next_ctx in
                 let next_term = Reduction.beta_appvect next_term args in
-                (* Finally, we might need to permute some rels... *)
+                (* Finally, we might need to permutate some rels. *)
                 let next_subst = Covering.context_map_of_splitting s in
-                ignore (subst; next_subst);
+                let perm_subst = Covering.make_permutation !evd subst next_subst in
+                let next_term = Covering.mapping_constr perm_subst next_term in
                 evd := Evarsolve.evar_define conv_fun next_env evm None ev next_term;
                 c
             (* This should not happen... *)
             | _ -> failwith "Should not fail here, please report."
           in
             Term.it_mkLambda_or_LetIn c (cut_ctx @ new_ctx)
-        ) branches_ty sp in
+        ) branches_ty branches_subst sp in
 
         (* Get back to the original context. *)
         let case_ty = Covering.mapping_constr rev_subst case_ty in

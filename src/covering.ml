@@ -349,6 +349,38 @@ and lift_patns n k = map (lift_patn n k)
 let lift_pat n p = lift_patn n 0 p
 let lift_pats n p = lift_patns n 0 p
 
+let make_permutation ?(env = Global.env ()) (sigma : Evd.evar_map)
+  ((ctx1, pats1, _) : context_map) ((ctx2, pats2, _) : context_map) : context_map =
+    let len = List.length ctx1 in
+    let perm = Array.make len None in
+    let merge_rels i1 i2 =
+        match perm.(pred i2) with
+        | None -> perm.(pred i2) <- Some i1
+        | Some j when Int.equal i1 j -> ()
+        | _ -> failwith "Could not generate a permutation"
+    in
+    (* FIXME This function could also check that constructors are the same and
+     * so on. It also need better error handling. *)
+    let rec merge_pats pat1 pat2 =
+      match pat1, pat2 with
+      | PRel i1, PRel i2 -> merge_rels i1 i2
+      | PHide i1, PRel i2 -> merge_rels i1 i2
+      | PRel i1, PHide i2 -> merge_rels i1 i2
+      | PHide i1, PHide i2 -> merge_rels i1 i2
+      | PCstr (_, pl1), PCstr (_, pl2) -> List.iter2 merge_pats pl1 pl2
+      (* FIXME Do we need to go inside PInac? If so, then we should as well
+       * examine constrs instead of pats... *)
+      | PInac _, _ -> ()
+      | _, PInac _ -> ()
+      | _, _ -> failwith "Could not generate a permutation"
+    in
+    List.iter2 merge_pats pats1 pats2;
+    let pats = Array.map (function
+                          | None -> failwith "Could not generate a permutation"
+                          | Some i -> PRel i) perm in
+    let pats = Array.to_list pats in
+      mk_ctx_map sigma ctx1 pats ctx2
+
 type unification_result = 
   (context_map * int * constr * pat) option
 

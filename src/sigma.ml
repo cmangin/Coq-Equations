@@ -415,14 +415,16 @@ let build_generalization_constr evd =
  *   - a context [ctx'];
  *   - a return type valid under [ctx'];
  *   - the type of the branches of the case;
+ *   - a context_map for each branch;
  *   - a number of cuts;
  *   - a reverse substitution from [ctx] to [ctx'];
  *   - a list of terms in [ctx] to apply to the case once it is built;
  *   - a boolean about the need for simplification or not. *)
 let smart_case (env : Environ.env) (evd : Evd.evar_map ref)
   (ctx : Context.rel_context) (rel : int) (goal : Term.types) :
-    Context.rel_context * Term.types * Term.types array * int *
-    Covering.context_map * Term.constr list * bool =
+    Context.rel_context * Term.types *
+    Term.types array * Covering.context_map array *
+    int * Covering.context_map * Term.constr list * bool =
   let after, (_, _, rel_ty), before = Covering.split_context (pred rel) ctx in
   let rel_ty = Vars.lift rel rel_ty in
   let rel_t = Constr.mkRel rel in
@@ -565,6 +567,9 @@ let smart_case (env : Environ.env) (evd : Evd.evar_map ref)
         let target_rel = Term.destRel target_rel in
         (* We know that this call will fall in the simple case
          * of [single_subst], because we already strengthened everything. *)
+        (* TODO Related to [compute_omitted_bis], we cannot actually substitute
+         * the terms that were omitted simply due to the fact that nothing
+         * depends on them, as it would be an ill-typed substitution. *)
         let lsubst = Covering.single_subst env !evd target_rel fresh_rel ctx in
           Covering.compose_subst ~sigma:!evd lsubst subst
   ) 0 omitted subst in
@@ -638,20 +643,55 @@ let smart_case (env : Environ.env) (evd : Evd.evar_map ref)
   (* If something is wrong here, it means that one of the parameters was
    * omitted or cut, which should be wrong... *)
   let params = List.map (Vars.lift (-(nb_cuts + oib.mind_nrealargs + 1))) params in
+  let goal = Termops.it_mkProd_or_LetIn goal cuts_ctx in
+  let goal = Term.it_mkLambda_or_LetIn goal fresh_ctx in
   let branches_ty = Inductive.build_branches_type pind (mib, oib) params goal in
+  (* Refresh the inductive family. *)
+  let indfam = Inductiveops.make_ind_family (pind, params) in
+  let branches_info = Inductiveops.get_constructors env indfam in
+  let full_subst =
+    let (ctx', pats, ctx) = Covering.id_subst ctx in
+    let pats = Covering.lift_pats (oib.mind_nrealargs + 1) pats in
+    let ctx' = arity_ctx @ ctx' in
+      Covering.mk_ctx_map !evd ctx' pats ctx
+  in
+  let full_subst = Covering.compose_subst ~sigma:!evd subst full_subst in
+  let pats_ctx' = pi2 (Covering.id_subst ctx') in
+  let pats_cuts = pi2 (Covering.id_subst cuts_ctx) in
+  let branches_subst = Array.map (fun summary ->
+    (* This summary is under context [ctx']. *)
+    let indices = summary.Inductiveops.cs_concl_realargs in
+    let params = Array.of_list summary.Inductiveops.cs_params in
+    let term = Constr.mkConstructU summary.Inductiveops.cs_cstr in
+    let term = Constr.mkApp (term, params) in
+    let term = Vars.lift (summary.Inductiveops.cs_nargs) term in
+    let term = Constr.mkApp (term, Termops.rel_vect 0 summary.Inductiveops.cs_nargs) in
+    (* Indices are typed under [args @ ctx'] *)
+    let indices = (Array.to_list indices) @ [term] in
+    let args = summary.Inductiveops.cs_args in
+    (* Substitute the indices in [cuts_ctx]. *)
+    let rev_indices = List.rev indices in
+    let pats_indices = List.map Covering.pat_of_constr rev_indices in
+    let pats_ctx' = Covering.lift_pats summary.Inductiveops.cs_nargs pats_ctx' in
+    let pats = pats_indices @ pats_ctx' in
+    let cuts_ctx = Covering.specialize_rel_context pats cuts_ctx in
+    let pats = Covering.lift_pats nb_cuts pats in
+    let pats = pats_cuts @ pats in
+    let csubst = Covering.mk_ctx_map !evd (cuts_ctx @ args @ ctx') pats (pi1 subst) in
+      Covering.compose_subst ~sigma:!evd csubst full_subst
+  ) branches_info in
   
   (* ===== RESULT ===== *)
   let to_apply = cut_vars @ to_apply in
-  let goal = Termops.it_mkProd_or_LetIn goal cuts_ctx in
-  let goal = Term.it_mkLambda_or_LetIn goal fresh_ctx in
    (* We have everything we need:
    *  - a context [ctx'];
    *  - a return type [goal] valid under [ctx'];
    *  - the type of the branches of the case;
+   *  - a context_map for each branch;
    *  - a number of cuts [nb_cuts];
    *  - a reverse substitution [rev_subst_without_cuts] from [ctx] to [ctx'];
    *  - some terms in [ctx] to apply to the case once it is built. *)
-      (ctx', goal, branches_ty, nb_cuts, rev_subst_without_cuts, to_apply, simpl)
+      (ctx', goal, branches_ty, branches_subst, nb_cuts, rev_subst_without_cuts, to_apply, simpl)
 
 (* It is assumed that we want to build a term of type [@Generalization ty c],
  * and that [ty] and [c] are typed under the named_context of env. *)

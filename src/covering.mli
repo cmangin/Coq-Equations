@@ -100,6 +100,8 @@ val lift_patn : int -> int -> pat -> pat
 val lift_patns : int -> int -> pat list -> pat list
 val lift_pat : int -> pat -> pat
 val lift_pats : int -> pat list -> pat list
+val make_permutation : ?env:Environ.env -> Evd.evar_map ->
+  context_map -> context_map -> context_map
 
 (** Programs and splitting trees *)
 
