@@ -359,20 +359,26 @@ let make_permutation ?(env = Global.env ()) (sigma : Evd.evar_map)
         | Some j when Int.equal i1 j -> ()
         | _ -> failwith "Could not generate a permutation"
     in
+    let rec collect_rels acc c =
+      if Term.isRel c then Term.destRel c :: acc
+      else Term.fold_constr collect_rels acc c
+    in
+    let merge_constrs c1 c2 =
+      let rels1 = collect_rels [] c1 in
+      let rels2 = collect_rels [] c2 in
+      try List.iter2 merge_rels rels1 rels2
+      with Invalid_argument _ -> failwith "Could not generate a permutation"
+    in
     (* FIXME This function could also check that constructors are the same and
      * so on. It also need better error handling. *)
-    let rec merge_pats pat1 pat2 =
-      match pat1, pat2 with
-      | PRel i1, PRel i2 -> merge_rels i1 i2
-      | PHide i1, PRel i2 -> merge_rels i1 i2
-      | PRel i1, PHide i2 -> merge_rels i1 i2
-      | PHide i1, PHide i2 -> merge_rels i1 i2
-      | PCstr (_, pl1), PCstr (_, pl2) -> List.iter2 merge_pats pl1 pl2
-      (* FIXME Do we need to go inside PInac? If so, then we should as well
-       * examine constrs instead of pats... *)
-      | PInac _, _ -> ()
-      | _, PInac _ -> ()
-      | _, _ -> failwith "Could not generate a permutation"
+    let merge_pats pat1 pat2 =
+      let env1 = Environ.push_rel_context ctx1 env in
+      let env2 = Environ.push_rel_context ctx2 env in
+      let c1 = constr_of_pat env1 pat1 in
+      let c2 = constr_of_pat env2 pat2 in
+      let c1 = Tacred.compute env1 sigma c1 in
+      let c2 = Tacred.compute env2 sigma c2 in
+        merge_constrs c1 c2
     in
     List.iter2 merge_pats pats1 pats2;
     let pats = Array.map (function
