@@ -1369,6 +1369,9 @@ let rec covering_aux env evars data prev clauses path (ctx,pats,ctx' as prob) le
 			   mkRel var) sortinv
 		in args, !argref
 	      in
+              (* Don't forget section variables. *)
+              let secvars = Context.instance_from_named_context (Environ.named_context env) in
+              let secvars = Array.of_list secvars in
 	      let evar = new_untyped_evar () in
 	      let path' = evar :: path in
 	      let lets' =
@@ -1387,7 +1390,7 @@ let rec covering_aux env evars data prev clauses path (ctx,pats,ctx' as prob) le
 		      refined_arg = refarg;
 		      refined_path = path';
 		      refined_ex = evar;
-		      refined_app = (mkEvar (evar, [||]), strength_app);
+		      refined_app = (mkEvar (evar, secvars), strength_app);
 		      refined_revctx = revctx;
 		      refined_newprob = newprob;
 		      refined_newprob_to_lhs = newprob_to_lhs;

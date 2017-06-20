@@ -165,7 +165,7 @@ let term_of_tree status isevar env (i, delta, ty) ann tree =
                 let next_term = Reduction.beta_appvect next_term args in
                 (* Finally, we might need to permutate some rels. *)
                 let next_subst = Covering.context_map_of_splitting s in
-                let perm_subst = Covering.make_permutation !evd subst next_subst in
+                let perm_subst = Covering.make_permutation evm subst next_subst in
                 let next_term = Covering.mapping_constr perm_subst next_term in
                 evd := Evarsolve.evar_define conv_fun next_env evm None ev next_term;
                 c
