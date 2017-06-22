@@ -937,14 +937,20 @@ let prove_unfolding_lemma info proj f_cst funf_cst split gl =
       (tclTHEN (tclTRY (to82 Cctac.f_equal)) solve_rec_eq)
   in
   let abstract tac = tclABSTRACT None tac in
-  let rec aux = function
+  let rec aux t =
+    match t with
     | Split ((ctx,pats,_), var, _, splits) ->
 	(fun gl ->
 	  match kind_of_term (pf_concl gl) with
 	  | App (eq, [| ty; x; y |]) -> 
 	     let f, pats' = decompose_app y in
-	     let c = List.nth (List.rev pats') (pred var) in
-	     let id = destVar (fst (decompose_app c)) in
+             let c, unfolds =
+                if !Equations_common.ocaml_splitting then
+                  let _, _, c, _ = Term.destCase f in c, tclIDTAC
+                else
+                  List.nth (List.rev pats') (pred var), unfolds
+             in
+             let id = destVar (fst (decompose_app c)) in
 	     let splits = List.map_filter (fun x -> x) (Array.to_list splits) in
 	       to82 (abstract (of82 (tclTHEN_i (to82 (depelim id))
 				  (fun i -> let split = nth splits (pred i) in
