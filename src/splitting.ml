@@ -147,8 +147,8 @@ let term_of_tree status isevar env (i, delta, ty) ann tree =
            * either optimize (but names in [csubst] are worse) or just insert
            * a sanity-check. *)
           let ((hole, c), lsubst) = simpl_step (cut_ctx @ new_ctx @ ctx', ty) in
-          let subst = Covering.compose_subst ~sigma:!evd csubst subst in
-          let subst = Covering.compose_subst ~sigma:!evd lsubst subst in
+          let subst = Covering.compose_subst ~unsafe:true ~sigma:!evd csubst subst in
+          let subst = Covering.compose_subst ~unsafe:true ~sigma:!evd lsubst subst in
           (* Now we build a term to put in the match branch. *)
           let c =
             match hole, next with

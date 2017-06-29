@@ -201,8 +201,8 @@ let typecheck_map env evars (ctx, subst, ctx') =
       ctx' subst []
   in ()
 
-let check_ctx_map ?(env = Global.env ()) evars map =
-  if debug then
+let check_ctx_map ?(unsafe = false) ?(env = Global.env ()) evars map =
+  if debug && not unsafe then
     try typecheck_map env evars map; map
     with Type_errors.TypeError (env, e) ->
       errorlabstrm "equations"
@@ -219,8 +219,8 @@ let check_ctx_map ?(env = Global.env ()) evars map =
 
   else map
     
-let mk_ctx_map ?(env = Global.env ()) evars ctx subst ctx' =
-  let map = (ctx, subst, ctx') in check_ctx_map ~env evars map
+let mk_ctx_map ?(unsafe = false) ?(env = Global.env ()) evars ctx subst ctx' =
+  let map = (ctx, subst, ctx') in check_ctx_map ~unsafe ~env evars map
 
 let rec map_patterns f ps =
   List.map (function
@@ -597,9 +597,10 @@ let check_eq_context_nolet env sigma (_, _, g as snd) (d, _, _ as fst) =
     (str "Contexts do not agree for composition: "
        ++ pr_context_map env snd ++ str " and " ++ pr_context_map env fst)
 
-let compose_subst ?(env = Global.env()) ?(sigma=Evd.empty) ((g',p',d') as snd) ((g,p,d) as fst) =
-  if debug then check_eq_context_nolet env sigma snd fst;
-  mk_ctx_map ~env sigma g' (specialize_pats p' p) d
+let compose_subst ?(unsafe = false) ?(env = Global.env()) ?(sigma=Evd.empty)
+  ((g',p',d') as snd) ((g,p,d) as fst) =
+  if debug && not unsafe then check_eq_context_nolet env sigma snd fst;
+  mk_ctx_map ~unsafe ~env sigma g' (specialize_pats p' p) d
 (*     (g', (specialize_pats p' p), d) *)
 
 let push_mapping_context (n, b, t as decl) (g,p,d) =
@@ -623,7 +624,7 @@ let lift_subst evd (ctx : context_map) (g : rel_context) =
   let map = List.fold_right (fun decl acc -> push_mapping_context decl acc) g ctx in
     check_ctx_map evd map
     
-let single_subst env evd x p g =
+let single_subst ?(unsafe = false) env evd x p g =
   let t = pat_constr p in
     if eq_constr t (mkRel x) then
       id_subst g
@@ -639,7 +640,7 @@ let single_subst env evd x p g =
       (* let pats = list_tabulate  *)
       (* 	(fun i -> let k = succ i in if k = x then p else PRel k) *)
       (* 	(List.length g) *)
-      in mk_ctx_map evd substctx pats g
+      in mk_ctx_map ~unsafe evd substctx pats g
     else
       let (ctx, s, g), _ = strengthen env evd g x t in
       let x' = match nth s (pred x) with PRel i -> i | _ -> error "Occurs check singleton subst"
@@ -648,7 +649,7 @@ let single_subst env evd x p g =
 	   in the context and the patterns. *)
       let substctx = subst_in_ctx x' t' ctx in
       let pats = List.map_i (fun i p -> subst_constr_pat x' (lift (-1) t') p) 1 s in
-	mk_ctx_map evd substctx pats g
+	mk_ctx_map ~unsafe evd substctx pats g
     
 exception Conflict
 exception Stuck

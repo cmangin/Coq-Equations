@@ -57,10 +57,11 @@ val ppcontext_map : context_map -> unit
 val typecheck_map :
   Environ.env -> Evd.evar_map -> context_map -> unit
 val check_ctx_map :
-  ?env:Environ.env -> Evd.evar_map -> context_map -> context_map
+  ?unsafe:bool -> ?env:Environ.env -> Evd.evar_map -> context_map -> context_map
 
 (** Smart constructor (doing runtime checks) *)
 val mk_ctx_map :
+  ?unsafe:bool ->
   ?env:Environ.env ->
   Evd.evar_map ->
   rel_context ->
@@ -202,6 +203,7 @@ val check_eq_context_nolet :
   context_map ->
   context_map -> unit
 val compose_subst :
+  ?unsafe:bool ->
   ?env:Environ.env ->
   ?sigma:Evd.evar_map ->
   context_map ->
@@ -214,6 +216,7 @@ val push_mapping_context :
 val lift_subst :
   Evd.evar_map -> context_map -> rel_context -> context_map
 val single_subst :
+  ?unsafe:bool ->
   env ->
   Evd.evar_map ->
   Int.Set.elt ->

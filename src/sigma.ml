@@ -515,8 +515,8 @@ let smart_case (env : Environ.env) (evd : Evd.evar_map ref)
   (* FIXME If we decomment this to be greedier, then we cannot compute a nice
    * context_map, since we really want to forget about what was omitted in
    * this second pass. A clear is not a proper substitution. *)
-(*  let rev_omitted, nb = compute_omitted_bis [] omitted candidate rev_indices nb in
-  let omitted = List.rev rev_omitted in*)
+  let rev_omitted, nb = compute_omitted_bis [] omitted candidate rev_indices nb in
+  let omitted = List.rev rev_omitted in
 
   (* At this point, we have [omitted] which is a list of either [Some rel] when
    * the corresponding index is omitted, [None] otherwise, and [nb] is the number
@@ -570,8 +570,8 @@ let smart_case (env : Environ.env) (evd : Evd.evar_map ref)
         (* TODO Related to [compute_omitted_bis], we cannot actually substitute
          * the terms that were omitted simply due to the fact that nothing
          * depends on them, as it would be an ill-typed substitution. *)
-        let lsubst = Covering.single_subst env !evd target_rel fresh_rel ctx in
-          Covering.compose_subst ~sigma:!evd lsubst subst
+        let lsubst = Covering.single_subst ~unsafe:true env !evd target_rel fresh_rel ctx in
+          Covering.compose_subst ~unsafe:true ~sigma:!evd lsubst subst
   ) 0 omitted subst in
   let nb_cuts = pred (Term.destRel
    (Covering.mapping_constr subst (Constr.mkRel 1))) in
@@ -580,7 +580,7 @@ let smart_case (env : Environ.env) (evd : Evd.evar_map ref)
     let lift_subst = Covering.mk_ctx_map !evd (arity_ctx @ ctx)
     (Covering.lift_pats (oib.mind_nrealargs + 1) (pi2 (Covering.id_subst ctx)))
     ctx in
-      Covering.compose_subst ~sigma:!evd subst lift_subst
+      Covering.compose_subst ~unsafe:true ~sigma:!evd subst lift_subst
   in
 
   (* Finally, we can work on producing a return type. *)
@@ -655,7 +655,7 @@ let smart_case (env : Environ.env) (evd : Evd.evar_map ref)
     let ctx' = arity_ctx @ ctx' in
       Covering.mk_ctx_map !evd ctx' pats ctx
   in
-  let full_subst = Covering.compose_subst ~sigma:!evd subst full_subst in
+  let full_subst = Covering.compose_subst ~unsafe:true ~sigma:!evd subst full_subst in
   let pats_ctx' = pi2 (Covering.id_subst ctx') in
   let pats_cuts = pi2 (Covering.id_subst cuts_ctx) in
   let branches_subst = Array.map (fun summary ->
@@ -678,7 +678,7 @@ let smart_case (env : Environ.env) (evd : Evd.evar_map ref)
     let pats = Covering.lift_pats nb_cuts pats in
     let pats = pats_cuts @ pats in
     let csubst = Covering.mk_ctx_map !evd (cuts_ctx @ args @ ctx') pats (pi1 subst) in
-      Covering.compose_subst ~sigma:!evd csubst full_subst
+      Covering.compose_subst ~unsafe:true ~sigma:!evd csubst full_subst
   ) branches_info in
   
   (* ===== RESULT ===== *)
