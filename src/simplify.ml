@@ -702,12 +702,24 @@ let simplify_ind_pack_inv : simplification_fun =
   fun (env : Environ.env) (evd : Evd.evar_map ref) ((ctx, ty) : goal) ->
   (* FIXME Can't ignore _all_ errors? *)
   try
-    let f, args = Term.decompose_appvect ty in 
-    if not (check_constant (Lazy.force EqRefs.opaque_ind_pack_eq_inv) f) ||
-       not (Int.equal 8 (Array.length args)) then
-      raise (CannotSimplify (str
-        "Expected a full application of [opaque_ind_pack_eq_inv]. Maybe
-         you did not solve completely a NoConfusion step?"));
+    let reduce c =
+      let env = Environ.push_rel_context ctx env in
+        Tacred.hnf_constr env !evd c
+    in
+    let try_decompose ty =
+      let f, args = Term.decompose_appvect ty in 
+      if not (check_constant (Lazy.force EqRefs.opaque_ind_pack_eq_inv) f) ||
+         not (Int.equal 8 (Array.length args)) then
+        raise (CannotSimplify (str
+          "Expected a full application of [opaque_ind_pack_eq_inv]. Maybe
+           you did not solve completely a NoConfusion step?"));
+      f, args
+    in
+    let (f, args), ty =
+      try try_decompose ty, ty with CannotSimplify _ ->
+        let ty = reduce ty in
+        try_decompose ty, ty
+    in
     let tA = args.(0) in
     let teqdec = args.(1) in
     let tB = args.(2) in
@@ -801,16 +813,16 @@ let infer_step ~(loc:Loc.t) ~(isSol:bool)
     let tA, tu, tv = check_equality ty1 in
     (* If the user wants a solution, we need to respect his wishes. *)
     if isSol then
-      if Term.isRel tu then Solution Left
-      else if Term.isRel tv then Solution Right
+      if Term.isRel tv then Solution Right
+      else if Term.isRel tu then Solution Left
       else raise (CannotSimplify (str "Neither side of the equality is a variable."))
     else begin
       let check_occur trel term =
         let rel = Term.destRel trel in
           not (Int.Set.mem rel (Covering.dependencies_of_term env !evd ctx term rel))
       in
-      if Term.isRel tu && check_occur tu tv then Solution Left
-      else if Term.isRel tv && check_occur tv tu then Solution Right
+      if Term.isRel tv && check_occur tv tu then Solution Right
+      else if Term.isRel tu && check_occur tu tv then Solution Left
       else
       let check_ind t =
         let f, _ = Term.decompose_app t in
@@ -869,8 +881,10 @@ let expand_many rule env evd ((_, ty) : goal) : simplification_rules =
 let rec execute_step : simplification_step -> simplification_fun = function
   | Deletion force -> deletion ~force
   | Solution dir -> solution ~dir:dir
-  | NoConfusion rules -> compose_fun simplify_ind_pack_inv
-      (compose_fun (simplify rules) noConfusion)
+  (* FIXME Not enough retries? *)
+  | NoConfusion rules ->
+      let noconf_out = (*with_retry*) simplify_ind_pack_inv in
+        compose_fun noconf_out (compose_fun (simplify rules) noConfusion)
   | NoConfusionOut -> simplify_ind_pack_inv
   | NoCycle -> noCycle
   | ElimTrue -> elim_true

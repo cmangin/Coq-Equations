@@ -57,7 +57,8 @@ let helper_evar evm evar env typ src =
 let term_of_tree status isevar env (i, delta, ty) ann tree =
   let oblevars = ref Evar.Set.empty in
   let helpers = ref [] in
-  let rec aux evm = function
+  let rec aux evm t =
+    match t with
     | Compute ((ctx, _, _), ty, RProgram rhs) -> 
 	let body = it_mkLambda_or_LetIn rhs ctx and typ = it_mkProd_or_subst ty ctx in
 	  evm, body, typ
@@ -146,6 +147,16 @@ let term_of_tree status isevar env (i, delta, ty) ann tree =
           (* TODO This context should be the same as (pi1 csubst). We could
            * either optimize (but names in [csubst] are worse) or just insert
            * a sanity-check. *)
+          (*
+          let () =
+            let ctx = cut_ctx @ new_ctx @ ctx' in
+            msg_info(str"Simplifying term:");
+            msg_info(let env = Environ.push_rel_context ctx env in
+              Printer.pr_constr_env env !evd ty);
+            msg_info(str"... in context:");
+            msg_info(Printer.pr_rel_context env !evd ctx)
+          in
+          *)
           let ((hole, c), lsubst) = simpl_step (cut_ctx @ new_ctx @ ctx', ty) in
           let subst = Covering.compose_subst ~unsafe:true ~sigma:!evd csubst subst in
           let subst = Covering.compose_subst ~unsafe:true ~sigma:!evd lsubst subst in

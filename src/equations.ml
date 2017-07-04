@@ -311,7 +311,7 @@ let ind_fun_tac is_rec f info fid split ind =
   else tclCOMPLETE (tclTHENLIST
       [to82 (set_eos_tac ()); to82 intros; aux_ind_fun info split])
 
-let subst_rec_split evd f comp comprecarg prob s split =
+let subst_rec_split env evd f comp comprecarg prob s split =
   let map_proto f ty =
     match comprecarg with
     | Some recarg ->
@@ -398,7 +398,14 @@ let subst_rec_split evd f comp comprecarg prob s split =
 		             if mem_assoc (out_name n) s then acc
 		             else (mapping_constr subst c) :: acc
 		           else (mapping_constr subst c) :: acc) 0 [] args 
-	   in (mkEvar (ev', [||]), rev args'), !refarg
+          (* FIXME This array should not be empty... *)
+            in
+            let secvars =
+              let named_context = Environ.named_context env in
+                List.map (fun (id, _, _) -> Constr.mkVar id) named_context
+            in
+            let secvars = Array.of_list secvars in
+	      (mkEvar (ev', secvars), rev args'), !refarg
 	 else 
 	   let first, last = List.chop (length s) (map (mapping_constr subst) args) in
 	   (applistc (mapping_constr subst fev) first, last), arg - length s
@@ -1016,15 +1023,15 @@ let prove_unfolding_lemma info proj f_cst funf_cst split gl =
       Global.set_strategy (ConstKey funf_cst) Conv_oracle.Expand;
       raise e
       
-let update_split evd is_rec cmap f prob id split =
+let update_split env evd is_rec cmap f prob id split =
   match is_rec with
-  | Some (Structural _) -> subst_rec_split evd f None None prob [(id, f)] split
+  | Some (Structural _) -> subst_rec_split env evd f None None prob [(id, f)] split
   | Some (Logical r) -> 
     let split' = subst_comp_proj_split f (mkConst r.comp_proj) split in
     let rec aux = function
       | RecValid (id, Valid (ctx, ty, args, tac, view, 
 			    [goal, args', newprob, invsubst, rest])) ->	  
-	 let rest = aux (subst_rec_split evd f r.comp (Some r.comp_recarg)
+	 let rest = aux (subst_rec_split env evd f r.comp (Some r.comp_recarg)
                                          newprob [(id, f)] rest) in
 	 (match invsubst with
 	  | Some s -> Mapping (s, rest)
@@ -1080,6 +1087,7 @@ let define_by_eqs opts i (l,ann) t nt eqs =
       try_bool_opt (OComp false), irec,
       try_bool_opt (OEquations false), try_bool_opt (OInd false)
   in
+  let with_comp = with_comp && not !Equations_common.ocaml_splitting in
   let env = Global.env () in
   let poly = Flags.is_universe_polymorphism () in
   let evd = ref (Evd.from_env env) in
@@ -1203,17 +1211,17 @@ let define_by_eqs opts i (l,ann) t nt eqs =
 	      let fixdecls' = [Name i, Some f, fixprot] in
 		(ctx @ fixdecls', pats, ctx'), ids
 	    in
-	    let split = update_split grevd is_recursive cmap f cutprob i split in
+	    let split = update_split env grevd is_recursive cmap f cutprob i split in
 	      build_equations with_ind env !evd i info sign is_recursive arity 
 			      f_cst f norecprob split
 	| None ->
 	   let prob = id_subst sign in
-	   let split = update_split grevd is_recursive cmap f prob i split in
+	   let split = update_split env grevd is_recursive cmap f prob i split in
 	   build_equations with_ind env !evd i info sign is_recursive arity 
 			   f_cst f prob split
 	| Some (Logical r) ->
 	    let prob = id_subst sign in
-	    let unfold_split = update_split grevd is_recursive cmap f prob i split in
+	    let unfold_split = update_split env grevd is_recursive cmap f prob i split in
 	    (* We first define the unfolding and show the fixpoint equation. *)
 	    let unfoldi = add_suffix i "_unfold" in
 	    let hook_unfold cmap helpers' vis gr' ectx = 

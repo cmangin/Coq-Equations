@@ -359,21 +359,24 @@ let make_permutation ?(env = Global.env ()) (sigma : Evd.evar_map)
         | Some j when Int.equal i1 j -> ()
         | _ -> failwith "Could not generate a permutation"
     in
-    let rec collect_rels acc c =
-      if Term.isRel c then Term.destRel c :: acc
-      else Term.fold_constr collect_rels acc c
+    let rec collect_rels k acc c =
+      if Term.isRel c then
+        let x = Term.destRel c in
+        if k < x && x <= len + k then x - k :: acc
+        else acc
+      else Termops.fold_constr_with_binders succ collect_rels k acc c
     in
     let merge_constrs c1 c2 =
-      let rels1 = collect_rels [] c1 in
-      let rels2 = collect_rels [] c2 in
+      let rels1 = collect_rels 0 [] c1 in
+      let rels2 = collect_rels 0 [] c2 in
       try List.iter2 merge_rels rels1 rels2
       with Invalid_argument _ -> failwith "Could not generate a permutation"
     in
     (* FIXME This function could also check that constructors are the same and
      * so on. It also need better error handling. *)
+    let env1 = Environ.push_rel_context ctx1 env in
+    let env2 = Environ.push_rel_context ctx2 env in
     let merge_pats pat1 pat2 =
-      let env1 = Environ.push_rel_context ctx1 env in
-      let env2 = Environ.push_rel_context ctx2 env in
       let c1 = constr_of_pat env1 pat1 in
       let c2 = constr_of_pat env2 pat2 in
       let c1 = Tacred.compute env1 sigma c1 in
@@ -1371,7 +1374,10 @@ let rec covering_aux env evars data prev clauses path (ctx,pats,ctx' as prob) le
 		in args, !argref
 	      in
               (* Don't forget section variables. *)
-              let secvars = Context.instance_from_named_context (Environ.named_context env) in
+              let secvars =
+                let named_context = Environ.named_context env in
+                  List.map (fun (id, _, _) -> Constr.mkVar id) named_context
+              in
               let secvars = Array.of_list secvars in
 	      let evar = new_untyped_evar () in
 	      let path' = evar :: path in
