@@ -69,6 +69,3 @@ val smart_case : Environ.env -> Evd.evar_map ref -> Context.rel_context ->
   Context.rel_context * Term.types *
   Term.types array * Covering.context_map array *
   int * Covering.context_map * Term.constr list * bool
-
-val generalization : Environ.env -> Term.types -> Term.constr -> Evd.evar_map ->
-                     Evd.evar_map * Term.constr

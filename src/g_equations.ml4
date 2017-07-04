@@ -172,21 +172,6 @@ TACTIC EXTEND uncurry_call
       ]
 END
 
-(* Generalize *)
-TACTIC EXTEND custom_generalization
-["custom_generalization"] -> [
-   Proofview.Goal.nf_enter (fun gl ->
-    let env = Proofview.Goal.env gl in
-    let concl = Proofview.Goal.concl gl in
-    let cls, args = Term.decompose_appvect concl in
-    if Array.length args <> 2 then
-      Tacticals.New.tclFAIL 0 (Pp.str "Not an application of Generalization")
-    else
-      (* TODO: add check that cls == Generalization here. *)
-      Proofview.Refine.refine ~unsafe:false (Sigma.generalization env args.(0) args.(1))
-  )]
-END
-
 (* TACTIC EXTEND pattern_tele *)
 (* [ "pattern_tele" constr(c) ident(hyp) ] -> [ fun gl -> *)
 (*   let settac = letin_tac None (Name hyp) c None onConcl in *)

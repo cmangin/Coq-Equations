@@ -401,13 +401,6 @@ let uncurry_call env sigma c =
   let app = substl (List.rev args) constr in
   !evdref, app, sigty
 
-(* Generalization of a term. *)
-
-let build_generalization_ref = lazy (init_reference
-  ["Equations";"Generalization"] "Build_Generalization")
-let build_generalization_constr evd =
-  Evarutil.e_new_global evd (Lazy.force build_generalization_ref)
-
 (* Produce parts of a case on a variable, while introducing cuts and
  * equalities when necessary.
  * This function requires a full rel_context, a rel to eliminate, and a goal.
@@ -689,59 +682,3 @@ let smart_case (env : Environ.env) (evd : Evd.evar_map ref)
    *  - a reverse substitution [rev_subst_without_cuts] from [ctx] to [ctx'];
    *  - some terms in [ctx] to apply to the case once it is built. *)
       (ctx', goal, branches_ty, branches_subst, nb_cuts, rev_subst_without_cuts, to_apply, simpl)
-
-(* It is assumed that we want to build a term of type [@Generalization ty c],
- * and that [ty] and [c] are typed under the named_context of env. *)
-let generalization (env : Environ.env) (ty : Term.types) (c : Term.constr)
-  (sigma : Evd.evar_map) : Evd.evar_map * Term.constr =
-  let evd = ref sigma in
-  let pind, args = Inductive.find_inductive env ty in
-  (* Identifiants already in the context. *)
-  let ids = Termops.ids_of_context env in
-
-  (* A predicate identifier. *)
-  let pred_id = Namegen.next_ident_away_in_goal (Names.id_of_string "P") ids in
-  (* A type for the predicate. *)
-  let pred_ty = Evarutil.e_new_Type env evd in
-
-  (* Build the type of the generalized proof. *)
-  (* First, get the arity of the inductive family. *)
-  let mib, oib = Global.lookup_pinductive pind in
-  let params, indices = List.chop mib.mind_nparams_rec args in
-  let indf = Inductiveops.make_ind_family (pind, params) in
-  let arity = Inductiveops.make_arity_signature env true indf in
-  (* Then, get the signature of this inductive family under this arity. *)
-  let _, _, _, _, _, _, right_valsig, tysig =
-    let pars = Inductiveops.inductive_paramdecls pind in
-    let parapp = Term.applist (Constr.mkIndU pind, params) in
-      sigmaize env evd pars parapp in
-  (* Generate the signature corresponding to the original term. *)
-  (* Nota: we should normally lift the indices, but we supposed they did
-   * not contain any rel. *)
-  let left_valsig = Vars.substl (c :: List.rev indices) right_valsig in
-  (* Build the equality between the two signatures. *)
-  let eq = Equations_common.mkEq evd tysig left_valsig right_valsig in
-  (* Build the goal under the arity and equality. *)
-  let goal = Constr.mkRel (oib.mind_nrealargs + 3) in
-  (* Finally build the goal after generalization. *)
-  let generalized_goal =
-    Term.it_mkProd_or_LetIn goal ((Anonymous, None, eq) :: arity) in
-  (* The final type. *)
-  let gen_id = Namegen.next_ident_away_in_goal (Names.id_of_string "H") ids in
-  let generalization_ty = Constr.mkProd (Names.Name.Name gen_id, generalized_goal, Constr.mkRel 2) in
-  let generalization_ty = Constr.mkLambda (Names.Name.Name pred_id, pred_ty, generalization_ty) in
-  (*
-  let generalization_ty = Term.it_mkProd_or_LetIn (Constr.mkRel 2) ctx in
-  *)
-  (* Build the corresponding proof. *)
-  let proof = Term.applist (Constr.mkRel 1, indices) in
-  let refl = Equations_common.mkRefl evd tysig left_valsig in
-  let proof = Constr.mkApp (proof, [| c; refl |]) in
-  let ctx =
-    [(Names.Name.Name gen_id, None, generalized_goal); (Names.Name.Name pred_id, None, pred_ty)] in
-  let generalization = Term.it_mkLambda_or_LetIn proof ctx in
-
-  (* Build the instance itself. *)
-  let build_gen = build_generalization_constr evd in
-  let instance = Constr.mkApp (build_gen, [| ty; c; generalization_ty; generalization |]) in
-    !evd, instance
