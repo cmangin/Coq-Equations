@@ -434,7 +434,7 @@ let with_retry (f : simplification_fun) : simplification_fun =
       let env = Environ.push_rel_context ctx env in
         Tacred.hnf_constr env !evd c
     in
-    (* Try to head-reduce the goal and reapply f. *) 
+    (* Try to head-reduce the goal and reapply f. *)
     let ty = reduce ty in
     (* We try to reduce further when the goal is a product. *)
     let ty = try
@@ -535,7 +535,7 @@ let deletion ~(force:bool) : simplification_fun =
           raise (CannotSimplify (str
             "[deletion] Cannot simplify without K on type " ++
             Printer.pr_constr_env env !evd tA))
-      in 
+      in
       let args = [Some tA; Some tdec; Some tx; Some tB; None] in
         build_app_infer env evd (ctx, ty) ctx tsimpl_K_dec args, subst
 
@@ -602,7 +602,7 @@ let solution ~(dir:direction) : simplification_fun =
     if nondep then
       Vars.substnl [Vars.lift (-rel') term'] (pred rel') body
     else
-      let teq_refl = Constr.mkApp (Builder.eq_refl evd, [| tA'; term' |]) in 
+      let teq_refl = Constr.mkApp (Builder.eq_refl evd, [| tA'; term' |]) in
         Vars.substnl [Vars.lift (-rel') teq_refl; Vars.lift (-rel') term'] (pred rel') body
   in
   let lsubst = Covering.single_subst env !evd rel' (Covering.pat_of_constr term') ctx' in
@@ -707,7 +707,7 @@ let simplify_ind_pack_inv : simplification_fun =
         Tacred.hnf_constr env !evd c
     in
     let try_decompose ty =
-      let f, args = Term.decompose_appvect ty in 
+      let f, args = Term.decompose_appvect ty in
       if not (check_constant (Lazy.force EqRefs.opaque_ind_pack_eq_inv) f) ||
          not (Int.equal 8 (Array.length args)) then
         raise (CannotSimplify (str

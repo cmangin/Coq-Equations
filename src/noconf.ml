@@ -124,7 +124,7 @@ let derive_no_confusion env evd (ind,u as indu) =
       let app = pack_ind_with_parlift (args + 2) in
 	it_mkLambda_or_LetIn 
 	  (mkProd_or_LetIn (Anonymous, None, app) s)
-	  ((Name xid, None, ind_with_parlift 1) :: 
+	  ((Name xid, None, ind_with_parlift 1) ::
           (lift_rel_context 1 argsctx))
     in
       mkcase env x elim (fun ind i id nparams args arity ->

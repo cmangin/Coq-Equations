@@ -119,7 +119,7 @@ let term_of_tree status isevar env (i, delta, ty) ann tree =
 	  Proofview.return pv', 
 	  it_mkLambda_or_LetIn (subst_vars substc c) ctx, it_mkProd_or_LetIn ty ctx
 	      
-    | Split ((ctx, _, _) as subst, rel, ty, sp) -> 
+    | Split ((ctx, _, _) as subst, rel, ty, sp) ->
       if !Equations_common.ocaml_splitting then
         (* Produce parts of a case that will be relevant. *)
         let evd = ref evm in
@@ -238,7 +238,7 @@ let term_of_tree status isevar env (i, delta, ty) ann tree =
           let ev = fst (destEvar term) in
             oblevars := Evar.Set.add ev !oblevars;
             evm, term
-        in       
+        in
         let casetyp = it_mkProd_or_subst ty ctx in
           evm, mkCast(case, DEFAULTcast, casetyp), casetyp
   in 

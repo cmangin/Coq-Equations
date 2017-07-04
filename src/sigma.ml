@@ -478,7 +478,7 @@ let smart_case (env : Environ.env) (evd : Evd.evar_map ref)
   (* [rev_indices] also include the variable being eliminated at its head. *)
   let omitted, nb, rev_indices, candidate =
     compute_omitted [] indices [] rev_arity_ctx [] [] 0 in
-  
+
   (* Now we do a pass backwards to check if we can omit more things. *)
   (* More precisely, for any variable in rev_indices, we can omit it if
    * nothing in the remaining context that was not omitted depends on it. *)
@@ -512,9 +512,6 @@ let smart_case (env : Environ.env) (evd : Evd.evar_map ref)
             rev_indices nb
     | _, _, _ -> assert false
   in
-  (* FIXME If we decomment this to be greedier, then we cannot compute a nice
-   * context_map, since we really want to forget about what was omitted in
-   * this second pass. A clear is not a proper substitution. *)
   let rev_omitted, nb = compute_omitted_bis [] omitted candidate rev_indices nb in
   let omitted = List.rev rev_omitted in
 
@@ -585,7 +582,7 @@ let smart_case (env : Environ.env) (evd : Evd.evar_map ref)
 
   (* Finally, we can work on producing a return type. *)
   let goal = Covering.mapping_constr subst_to_cuts goal in
-  
+
   (* ===== CUTS ===== *)
   let cuts_ctx, remaining = List.chop nb_cuts (pi1 subst) in
   let fresh_ctx = List.firstn (oib.mind_nrealargs + 1) remaining in
@@ -598,7 +595,7 @@ let smart_case (env : Environ.env) (evd : Evd.evar_map ref)
   in
   let rev_cut_vars = CList.map revert_cut (CList.init nb_cuts (fun i -> succ i)) in
   let cut_vars = List.rev rev_cut_vars in
-  
+
   (* ===== EQUALITY OF TELESCOPES ===== *)
   let goal, to_apply, simpl =
     if Int.equal nb 0 then goal, [], false
@@ -620,7 +617,7 @@ let smart_case (env : Environ.env) (evd : Evd.evar_map ref)
       in
       let sigctx = List.rev rev_sigctx in
       let sigty, _, sigconstr = telescope evd sigctx in
-      
+
       (* Build a goal with an equality of telescopes at the front. *)
       let left_sig = Vars.substl (List.rev tele_lhs) sigconstr in
       let right_sig = Vars.substl (List.rev tele_rhs) sigconstr in
@@ -680,7 +677,7 @@ let smart_case (env : Environ.env) (evd : Evd.evar_map ref)
     let csubst = Covering.mk_ctx_map !evd (cuts_ctx @ args @ ctx') pats (pi1 subst) in
       Covering.compose_subst ~unsafe:true ~sigma:!evd csubst full_subst
   ) branches_info in
-  
+
   (* ===== RESULT ===== *)
   let to_apply = cut_vars @ to_apply in
    (* We have everything we need:
@@ -748,4 +745,3 @@ let generalization (env : Environ.env) (ty : Term.types) (c : Term.constr)
   let build_gen = build_generalization_constr evd in
   let instance = Constr.mkApp (build_gen, [| ty; c; generalization_ty; generalization |]) in
     !evd, instance
-
