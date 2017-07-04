@@ -44,7 +44,6 @@ open Evd
 open Evarutil
 open Evar_kinds
 open Equations_common
-open Depelim
 open Termops
 open Syntax
 
